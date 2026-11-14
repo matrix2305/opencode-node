@@ -2,51 +2,115 @@
 
 A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
-memory from there.
+eventually memory from there.
 
-Status: **M0 spike** (validated). Not published yet.
+Status: **M1** — config file, CLI, cache-first startup, and full setup pull
+(agents, skills, commands, MCP, `opencode.jsonc`). Memory is not wired yet.
 
-## What is validated
+## How it works
 
-Running the plugin inside an isolated OpenCode 2.3.0 server against a live hub:
+```
+hub (OpenCode 2.x, /home/matrix2305)
+  ├─ /api/agent, /api/skill, /api/command, /api/config
+  ├─ /api/fs/list, /api/fs/read
+  └─ ~/.config/opencode, ~/agents
 
-- **Skills** — loaded from `GET /api/skill`, materialised as `SKILL.md` under the
-  local data dir and registered at runtime with `ctx.skill.transform`.
-- **Agents** — `AgentEditor` has no `add`, so the plugin writes
-  `~/.config/opencode/agents/<id>.md` and calls `ctx.agent.reload()`.
-- **Commands** — `Command.Info` has no template, so the plugin copies
-  `commands/*.md` from the hub via `/api/fs/read` and calls `ctx.command.reload()`.
-- **MCP** — servers are read from the hub config and registered with
-  `ctx.mcp.transform`.
-- **Hub transport** — plain HTTPS + Basic auth (`opencode:<password>`), works over
-  Tailscale without any special handling.
-
-## Spike usage
-
-```bash
-OCN_HUB_URL=https://matrix2305.tailbd26da.ts.net \
-OCN_HUB_PASSWORD=... \
-opencode serve
+node (this machine)
+  ├─ ~/.config/opencode-node/config.json     hub URL + passwordRef
+  ├─ ~/.local/share/opencode-node/
+  │    ├─ snapshot.json                      cached setup + hashes
+  │    ├─ skills/<id>/SKILL.md               materialised skills
+  │    └─ backup/<timestamp>/...             backups before overwrite
+  ├─ ~/.config/opencode/agents/*.md          written from the hub
+  ├─ ~/.config/opencode/commands/*.md        written from the hub
+  └─ opencode.jsonc                          hub config + node plugin entry
 ```
 
-The plugin reads those env vars, pulls from the hub, and writes a diagnostic log
-to `~/.local/share/opencode-node/spike.log`.
+On every OpenCode start the plugin applies the cached snapshot immediately
+(skills are registered at runtime, agents/commands are files), then refreshes in
+the background if the cache is older than `cacheSeconds`.
 
-`src/index.ts` is the spike. See `docs/M0-FINDINGS.md` for details and the next
-steps.
+## Install
 
-## Known constraints found in M0
+```bash
+node src/cli.ts init \
+  --hub https://matrix2305.tailbd26da.ts.net \
+  --password-ref keychain:opencode-matrix2305 \
+  --config \
+  --restart
+```
 
-- `AgentEditor` has no `add`; agents require files + reload (async pickup).
-- `ctx.skill.transform` silently drops a skill if an optional field is passed as
-  `undefined` (e.g. `autoinvoke: undefined`). Build objects conditionally.
-- `Skill.Info.path` must point to an existing file at registration time.
-- `/api/agent` with `location[directory]` only returns data after that location is
-  loaded; call `/api/location` first.
-- `/api/config` contains provider API keys. Do not log it or store it in plain text.
+- `--password-ref` accepts `keychain:<service>`, `secret:<name>`, `file:<path>`,
+  `env:<VAR>` or a raw password (not recommended).
+- `--config` replaces `~/.config/opencode/opencode.jsonc` with the hub config
+  (mode 0600, backup kept) and removes the legacy `opencode.json` so only one
+  document is active. The node plugin entry is preserved.
+- `--restart` runs `opencode service restart`.
+- Without `--config`, only agents/skills/commands/MCP are synced; local
+  providers/models stay untouched.
 
-## Roadmap
+## CLI
 
-M0 spike (done) → M1 config + CLI `init` → M2 full setup pull (agents/skills/
-commands/config/providers) → M3 memory pull/inject/push → M4 MCP allowlist +
-plugins → M5 TUI → M6 hardening + docs → publish `@matrix2305/opencode-node`.
+```bash
+oc-node status           # hub, cache age, counts, applied state, config drift
+oc-node doctor           # config, password, plugin entry, hub reachability
+oc-node pull             # refresh snapshot + materialise files
+oc-node pull --config    # also replace local opencode.jsonc with the hub config
+oc-node config           # apply the config from the current snapshot
+oc-node restart          # opencode service restart
+```
+
+`oc-node` is `src/cli.ts` (Node 23+ runs TypeScript directly). Use
+`node src/cli.ts <command>` from the repo, or install the bin after packaging.
+
+## What is synced
+
+| Category | Mechanism |
+| --- | --- |
+| Skills | `ctx.skill.transform` at runtime; `SKILL.md` materialised under the data dir |
+| Agents | `~/.config/opencode/agents/<id>.md` + `ctx.agent.reload()` |
+| Commands | `~/.config/opencode/commands/<name>.md` + `ctx.command.reload()` |
+| MCP | `ctx.mcp.transform` from the hub config |
+| Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved |
+| Memory | **not yet** (M3) |
+
+## Runtime constraints found in 2.3.0
+
+- `AgentEditor` has no `add`; agents must be files + reload (asynchronous).
+- `Skill.Info.path` must point to an existing file.
+- Do not pass optional fields as `undefined` (`autoinvoke: undefined` silently
+  drops the skill).
+- `Command.Info` has no template; command files are copied instead.
+- `/api/config` contains provider keys; never log it.
+- MCP transforms apply immediately, but `ctx.mcp.list()` is empty until the
+  server connects.
+
+See `docs/M0-FINDINGS.md` for the spike report.
+
+## Security
+
+- `config.json`, `opencode.jsonc` and the password file are `0600`.
+- Secrets are never logged. Prefer `keychain:`/`secret:` over a password file.
+- The hub password gives full filesystem access to the hub; treat it as a
+  server admin credential.
+- Every overwritten file is backed up under
+  `~/.local/share/opencode-node/backup/<timestamp>/`.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+node src/cli.ts status
+```
+
+Repo layout:
+
+```
+src/config.ts    config file, password refs, paths
+src/hub.ts       OpenCode hub client (Basic auth)
+src/sync.ts      pull, snapshot, materialise, config apply
+src/index.ts     OpenCode V2 plugin (cache-first + refresh + node tools)
+src/cli.ts       oc-node CLI
+docs/            findings and design notes
+```

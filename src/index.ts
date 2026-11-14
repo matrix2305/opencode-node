@@ -1,140 +1,185 @@
 import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
 
-const HUB = (process.env.OCN_HUB_URL ?? "").replace(/\/$/, "")
-const PASSWORD = process.env.OCN_HUB_PASSWORD ?? ""
-const STATE = path.join(os.homedir(), ".local", "share", "opencode-node")
-const LOG = path.join(STATE, "spike.log")
+import { DATA_DIR, LOG_FILE, defaultConfig, loadConfig, resolvePassword, type NodeConfig } from "./config.ts"
+import { Hub } from "./hub.ts"
+import type { Snapshot } from "./snapshot.ts"
+import {
+  loadApplied,
+  loadSnapshot,
+  materialize,
+  pull,
+  saveApplied,
+  saveSnapshot,
+} from "./sync.ts"
 
-const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
-const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
+let current: Snapshot | null = loadSnapshot()
+let refreshing: Promise<void> | null = null
 
 function log(...parts: unknown[]) {
-  fs.mkdirSync(STATE, { recursive: true })
-  const line = `[${new Date().toISOString()}] ${parts.map((p) => typeof p === "string" ? p : JSON.stringify(p)).join(" ")}\n`
-  fs.appendFileSync(LOG, line)
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true })
+    const line = `[${new Date().toISOString()}] ${parts
+      .map((p) => (typeof p === "string" ? p : JSON.stringify(p)))
+      .join(" ")}\n`
+    fs.appendFileSync(LOG_FILE, line)
+  } catch {}
 }
 
-function auth() {
-  return { Authorization: "Basic " + Buffer.from(`opencode:${PASSWORD}`).toString("base64") }
+function envConfig(): NodeConfig | null {
+  const url = process.env.OCN_HUB_URL ?? process.env.OPENCODE_REMOTE_URL
+  if (!url) return null
+  return {
+    ...defaultConfig(url, process.env.OCN_HUB_PASSWORD ? "env:OCN_HUB_PASSWORD" : undefined),
+  }
 }
 
-function hubUrl(pathname: string, query?: Record<string, string>) {
-  const url = new URL(pathname, HUB)
-  for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v)
-  return url
+function mcpConfig(def: any): any | null {
+  if (!def || typeof def !== "object") return null
+  if (def.type === "remote") {
+    return { type: "remote", url: def.url, ...(def.headers ? { headers: def.headers } : {}) }
+  }
+  if (def.type === "local") {
+    return {
+      type: "local",
+      command: def.command,
+      ...(def.environment ? { environment: def.environment } : {}),
+      ...(def.cwd ? { cwd: def.cwd } : {}),
+    }
+  }
+  return null
 }
 
-async function api(pathname: string, query?: Record<string, string>) {
-  const res = await fetch(hubUrl(pathname, query), { headers: auth() })
-  if (!res.ok) throw new Error(`${pathname} -> ${res.status} ${await res.text()}`)
-  return res.json() as Promise<any>
-}
-
-async function readRemote(rel: string) {
-  const res = await fetch(hubUrl("/api/fs/read/" + rel.split("/").map(encodeURIComponent).join("/")), { headers: auth() })
-  if (!res.ok) throw new Error(`read ${rel} -> ${res.status}`)
-  return res.text()
-}
-
-async function listRemote(abs: string) {
-  const data = await api("/api/fs/list", { path: abs })
-  return (data.data ?? []) as Array<{ path: string; type: "file" | "directory" }>
-}
-
-function configDir() {
-  return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode")
-}
-
-function writeFile(file: string, content: string) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, content)
+function summary() {
+  const applied = loadApplied()
+  return {
+    hub: current?.hub ?? null,
+    lastPull: current ? new Date(current.fetchedAt).toISOString() : null,
+    cacheAgeSeconds: current ? Math.round((Date.now() - current.fetchedAt) / 1000) : null,
+    counts: current
+      ? { skills: current.skills.length, agents: current.agents.length, commands: current.commands.length, mcp: Object.keys(current.mcp).length }
+      : null,
+    applied,
+    hashes: current?.hashes ?? null,
+    configDrift: Boolean(current?.config && loadApplied()?.config !== current.hashes.config),
+  }
 }
 
 export default Plugin.define({
   id: "opencode-node",
   async setup(ctx) {
-    log("setup:start", { version: ctx.app.version, location: ctx.location?.directory, hub: HUB })
-    if (!HUB || !PASSWORD) return log("setup:missing-config")
-
-    try {
-      const info = await api("/api/info")
-      log("hub:info", { version: info.version, host: info.hostname })
-
-      // ---------- skills: materialise then register at runtime ----------
-      const skills = await api("/api/skill")
-      const hubSkills = (skills.data ?? []).filter((s: any) =>
-        !BUILTIN_SKILLS.has(s.id) && String(s.path ?? "").includes("/.config/opencode/skills/"))
-      const registered: string[] = []
-      for (const skill of hubSkills) {
-        const file = path.join(STATE, "skills", skill.id, "SKILL.md")
-        writeFile(file, skill.content)
-        await ctx.skill.transform((editor) => {
-          const entry: any = { id: skill.id, name: skill.name, path: file, content: skill.content }
-          if (skill.description !== undefined) entry.description = skill.description
-          if (skill.autoinvoke !== undefined) entry.autoinvoke = skill.autoinvoke
-          editor.add(entry)
-        })
-        registered.push(skill.id)
-      }
-      await ctx.skill.reload()
-      log("skills:registered", { count: registered.length, ids: registered })
-
-      // ---------- agents: files + reload (AgentEditor has no add) ----------
-      const agents = await api("/api/agent")
-      const hubAgents = (agents.data ?? []).filter((a: any) => !BUILTIN_AGENTS.has(a.id))
-      const agentDir = path.join(configDir(), "agents")
-      for (const agent of hubAgents) {
-        const front: string[] = ["---", `description: ${JSON.stringify(agent.description ?? agent.id)}`, `mode: ${agent.mode ?? "primary"}`]
-        if (agent.model) front.push(`model: ${agent.model.providerID}/${agent.model.id}`)
-        if (agent.permissions?.length) front.push(`permissions: ${JSON.stringify(agent.permissions)}`)
-        front.push("---", "", agent.system ?? "", "")
-        writeFile(path.join(agentDir, `${agent.id}.md`), front.join("\n"))
-      }
-      await ctx.agent.reload()
-      log("agents:written", { count: hubAgents.length, ids: hubAgents.map((a: any) => a.id) })
-
-      // ---------- commands: copy files + reload ----------
-      const commandFiles: string[] = []
-      for (const dir of ["commands", "command"]) {
-        try {
-          for (const entry of await listRemote(`/home/matrix2305/.config/opencode/${dir}`)) {
-            if (entry.type === "file" && entry.path.endsWith(".md")) commandFiles.push(entry.path)
-          }
-        } catch {
-          // directory does not exist on the hub
-        }
-      }
-      for (const rel of commandFiles) {
-        const content = await readRemote(rel)
-        const name = rel.split("/").pop()!
-        writeFile(path.join(configDir(), "commands", name), content)
-      }
-      if (commandFiles.length) await ctx.command.reload()
-      log("commands:written", { count: commandFiles.length, files: commandFiles.map((f) => f.split("/").pop()) })
-
-      // ---------- MCP: runtime transform ----------
-      const config = await api("/api/config")
-      const doc = config.find((c: any) => c.info?.mcp?.servers)
-      const servers = (doc?.info?.mcp?.servers ?? {}) as Record<string, any>
-      if (Object.keys(servers).length) {
-        await ctx.mcp.transform((editor) => {
-          for (const [name, def] of Object.entries(servers)) {
-            if (def.type === "remote") {
-              editor.set(name, { type: "remote", url: def.url, ...(def.headers ? { headers: def.headers } : {}) } as any)
-            } else if (def.type === "local") {
-              editor.set(name, { type: "local", command: def.command, ...(def.environment ? { environment: def.environment } : {}) } as any)
-            }
-          }
-        })
-        await ctx.mcp.reload()
-      }
-      log("mcp:registered", { names: Object.keys(servers) })
-    } catch (err) {
-      log("setup:error", String(err))
+    const cfg = loadConfig() ?? envConfig()
+    if (!cfg) return
+    const password = resolvePassword(cfg.hub.passwordRef)
+    if (!password) {
+      log("setup:no-password", cfg.hub.url)
+      return
     }
-    log("setup:end")
+    const hub = new Hub(cfg.hub.url, password)
+    log("setup:start", { location: ctx.location?.directory, hub: cfg.hub.url, cached: Boolean(current) })
+
+    // Register transforms once; their callbacks always read the latest snapshot.
+    await ctx.skill.transform((editor) => {
+      const snap = current
+      if (!snap) return
+      for (const skill of snap.skills) {
+        const entry: any = {
+          id: skill.id,
+          name: skill.name,
+          path: path.join(DATA_DIR, "skills", skill.id, "SKILL.md"),
+          content: skill.content,
+        }
+        if (skill.description !== undefined) entry.description = skill.description
+        if (skill.autoinvoke !== undefined) entry.autoinvoke = skill.autoinvoke
+        editor.add(entry)
+      }
+    })
+
+    await ctx.mcp.transform((editor) => {
+      const snap = current
+      if (!snap) return
+      for (const [name, def] of Object.entries(snap.mcp)) {
+        const config = mcpConfig(def)
+        if (config) editor.set(name, config)
+      }
+    })
+
+    let applied = false
+    if (current) {
+      materialize(current)
+      await ctx.skill.reload()
+      await ctx.mcp.reload()
+      const previous = loadApplied()
+      if (previous?.agents !== current.hashes.agents) await ctx.agent.reload()
+      if (previous?.commands !== current.hashes.commands) await ctx.command.reload()
+      saveApplied({
+        skills: current.hashes.skills,
+        agents: current.hashes.agents,
+        commands: current.hashes.commands,
+        mcp: current.hashes.mcp,
+        ...(previous?.config ? { config: previous.config } : {}),
+      })
+      applied = Boolean(previous)
+    }
+
+    const refresh = async (force = false) => {
+      if (refreshing) return refreshing
+      refreshing = (async () => {
+        try {
+          const age = current ? (Date.now() - current.fetchedAt) / 1000 : Infinity
+          if (!force && age < cfg.cacheSeconds) {
+            log("refresh:cache", { age: Math.round(age), ttl: cfg.cacheSeconds })
+            return
+          }
+          const fresh = await pull(hub, cfg)
+          const changed = !current || JSON.stringify(fresh.hashes) !== JSON.stringify(current.hashes)
+          current = fresh
+          saveSnapshot(fresh)
+          materialize(fresh)
+          await ctx.skill.reload()
+          await ctx.mcp.reload()
+          const previous = loadApplied()
+          if (previous?.agents !== fresh.hashes.agents) await ctx.agent.reload()
+          if (previous?.commands !== fresh.hashes.commands) await ctx.command.reload()
+          saveApplied({
+            skills: fresh.hashes.skills,
+            agents: fresh.hashes.agents,
+            commands: fresh.hashes.commands,
+            mcp: fresh.hashes.mcp,
+            ...(previous?.config ? { config: previous.config } : {}),
+          })
+          log("refresh:ok", { changed, counts: { skills: fresh.skills.length, agents: fresh.agents.length, commands: fresh.commands.length, mcp: Object.keys(fresh.mcp).length } })
+          if (changed && fresh.config) log("config:drift", "hub config changed; run: oc-node pull --config")
+        } catch (err) {
+          log("refresh:error", String(err))
+        } finally {
+          refreshing = null
+        }
+      })()
+      return refreshing
+    }
+
+    await ctx.tool.transform((editor) => {
+      editor.namespace({ name: "node", description: "Remote OpenCode hub (opencode-node)" })
+      editor.add({
+        name: "status",
+        description: "Show the state of the connected OpenCode hub and the local cache",
+        input: { type: "object", properties: {}, additionalProperties: false },
+        execute: async () => ({ content: JSON.stringify(summary(), null, 2) }),
+      })
+      editor.add({
+        name: "sync",
+        description: "Pull the latest agents, skills, commands, MCP servers and memory from the hub",
+        input: { type: "object", properties: {}, additionalProperties: false },
+        execute: async () => {
+          await refresh(true)
+          return { content: JSON.stringify(summary(), null, 2) }
+        },
+      })
+    })
+
+    if (!applied) await refresh(true)
+    else void refresh()
   },
 })

@@ -13,7 +13,8 @@
     "README.md"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "oc-node": "node src/cli.ts"
   },
   "peerDependencies": {
     "@opencode/plugin": ">=2.0 <3"
@@ -22,5 +23,11 @@
     "@opencode/plugin": "2.3.0",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
+  },
+  "bin": {
+    "oc-node": "./src/cli.ts"
+  },
+  "engines": {
+    "node": ">=23"
   }
 }
