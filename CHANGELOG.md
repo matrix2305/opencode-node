@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Ignore macOS Finder metadata (`.DS_Store`, `._*`, `.Spotlight-V100`,
+  `.Trashes`, `.TemporaryItems`) in both pull and push memory scans.
+
 ## 0.2.0
 
 ### Config v3: configurable sync dirs

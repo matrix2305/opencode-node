@@ -1,6 +1,6 @@
 {
   "name": "@matrix2305/opencode-node",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenCode V2 node plugin: full setup sync (agents, skills, commands, plugins, models, MCP, credentials, memory) from a remote OpenCode hub.",
   "type": "module",
   "license": "MIT",

@@ -9,7 +9,7 @@ import type { MemoryFile, Snapshot } from "./snapshot.ts"
 import { safeRel } from "./safe.ts"
 
 const SKIP_DIRS = new Set([".git", "node_modules", "skills", ".clawhub", ".dreams"])
-const SKIP_SUFFIX = [".conflict-"]
+const SKIP_SUFFIX = [".conflict-", ".DS_Store", ".DS_Store/", "._", ".Spotlight-V100", ".Trashes", ".TemporaryItems"]
 const MAX_FILE = 1024 * 1024
 
 /** First memory-type sync dir's local root */
@@ -71,7 +71,7 @@ export function listLocalMemory(root: string): string[] {
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (!skipDir(entry.name)) walk(path.join(dir, entry.name))
-      } else if (!SKIP_SUFFIX.some((s) => entry.name.includes(s))) {
+      } else if (!SKIP_SUFFIX.some((s) => entry.name.includes(s)) && entry.name !== ".DS_Store" && !entry.name.startsWith("._")) {
         out.push(path.join(dir, entry.name))
       }
     }

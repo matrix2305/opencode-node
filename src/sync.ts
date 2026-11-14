@@ -184,7 +184,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       for (const entry of await hub.list(`${dir.remote}`)) {
         if (entry.type !== "file") continue
         const name = entry.path.split("/").pop() ?? ""
-        if (name.startsWith(".") || name.includes(".conflict-") || name.endsWith(".log")) continue
+        if (name.startsWith(".") || name.includes(".conflict-") || name.endsWith(".log") || name === ".DS_Store" || name.startsWith("._")) continue
         try {
           const content = await hub.read(entry.path)
           if (content.length > 1024 * 1024 || !isText(content)) continue
