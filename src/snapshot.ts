@@ -89,4 +89,6 @@ export interface Applied {
   mcp: string
   memory?: string
   config?: string
+  /** model refs disabled by this plugin (for re-enable when the hub re-adds them) */
+  nodeDisabledModels?: string[]
 }

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.1
+
+### Fixes
+
+- **Auth credentials no longer stack**: every refresh used to add another
+  credential with the same label (verified: 29 duplicates in practice). Connect
+  now goes through the local server API which lists and removes previous
+  hub-labelled credentials first; plugin-context fallback remains for
+  remote-server setups. One-off cleanup included.
+- **Empty hub model list no longer disables every model** (failed-fetch guard).
+- **Model parity is now correctly awaited and reported** (`models:applied`),
+  and previously disabled models are **re-enabled** when the hub re-adds them
+  (`applied.nodeDisabledModels` tracking).
+- **`applyConfig` fetches the live hub config** when applying, because the
+  snapshot now stores a **redacted** copy (`apiKey`/`secret`/`token`/`password`
+  values replaced with `{redacted}`) — no key material on disk.
+- **Local server URL is read from `service.json`** instead of hard-coded port.
+- **Path traversal protection** for ids/paths coming from the hub (skills,
+  agents, commands, memory rels, plugin files): `..`, absolute paths, NUL,
+  `node_modules`, `.git` rejected (`src/safe.ts`).
+- **Memory push lock**: timer, `node.sync` and RPC `push` are serialised; the
+  push timer is created once per process instead of once per location.
+- `OPENCODE_REMOTE_URL` no longer auto-activates the plugin (only explicit
+  `OCN_HUB_URL` does).
+- Backups are rotated (newest 20 kept).
+- Hub `package.json` dependencies now win over stale local versions
+  (local-only deps kept).
+- Removed a real API-key prefix from the published docs.
+
 ## 0.1.0
 
 First working release of the OpenCode node plugin.

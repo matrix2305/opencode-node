@@ -178,7 +178,7 @@ function cmdInit() {
       let configChanged = false
       if (flag("--config")) {
         info("warning:  local opencode.jsonc will be replaced by the hub config (backup kept)")
-        const result = applyConfig(snapshot, cfg, pluginSpec())
+        const result = await applyConfig(hub, snapshot, cfg, pluginSpec())
         configChanged = result.changed
         if (result.changed) info("config:   hub opencode.jsonc written (backup kept)")
       }
@@ -212,7 +212,7 @@ function cmdPull() {
     }
     let configChanged = false
     if (flag("--config")) {
-      const written = applyConfig(snapshot, cfg, pluginSpec())
+      const written = await applyConfig(hub, snapshot, cfg, pluginSpec())
       configChanged = written.changed
       if (written.changed) info("config:   hub opencode.jsonc written")
       else info("config:   already up to date")
@@ -388,7 +388,7 @@ function cmdRestart() {
   restartService()
 }
 
-function cmdConfig() {
+async function cmdConfig() {
   const cfg = loadConfig()
   if (!cfg) fail("not initialised")
   const mode = arg("--mode")
@@ -407,7 +407,7 @@ function cmdConfig() {
     return
   }
   if (mode === "auto" && flag("--no-apply")) return
-  const result = applyConfig(snapshot, cfg, pluginSpec())
+  const result = await applyConfig(ensureConfig(cfg), snapshot, cfg, pluginSpec())
   if (result.changed) {
     const applied = loadApplied(cfg) ?? { skills: "", agents: "", commands: "", mcp: "" }
     saveApplied(cfg, { ...applied, config: snapshot.hashes.config })

@@ -4,8 +4,9 @@ import path from "node:path"
 
 import { DATA_DIR, LOG_FILE, configMode, defaultConfig, loadConfig, pluginSpec, resolvePassword, skillsDir, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
-import { applyAuthMemory, fetchAuth, type ConnectResult } from "./auth.ts"
-import type { ModelEntry } from "./snapshot.ts"
+import { applyAuthMemory, applyAuthViaLocalServer, fetchAuth, type ConnectResult } from "./auth.ts"
+import { planModelUpdates, type ModelPlan } from "./models.ts"
+import { safeName } from "./safe.ts"
 import { NodeRpc } from "./rpc.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
@@ -22,7 +23,18 @@ import {
 
 let current: Snapshot | null = null
 let refreshing: Promise<void> | null = null
+let pushing: Promise<unknown> | null = null
+let timerStarted = false
 let rpc: { events: { emit: (name: string, data: any) => unknown } } | null = null
+
+/** Serialise memory pushes so the timer, tools and RPC cannot race. */
+async function pushMemoryLocked(hub: Hub, cfg: NodeConfig, snapshot: Snapshot): Promise<import("./memory.ts").PushResult> {
+  if (pushing) return pushing as Promise<import("./memory.ts").PushResult>
+  pushing = pushMemory(hub, cfg, snapshot).finally(() => {
+    pushing = null
+  })
+  return pushing as Promise<import("./memory.ts").PushResult>
+}
 
 function log(...parts: unknown[]) {
   try {
@@ -35,7 +47,9 @@ function log(...parts: unknown[]) {
 }
 
 function envConfig(): NodeConfig | null {
-  const url = process.env.OCN_HUB_URL ?? process.env.OPENCODE_REMOTE_URL
+  // Explicit OCN_* envs opt in; ambient shell exports do not (avoids surprise
+  // activation in every project when OPENCODE_REMOTE_URL is globally exported).
+  const url = process.env.OCN_HUB_URL
   if (!url) return null
   return {
     ...defaultConfig(url, process.env.OCN_HUB_PASSWORD ? "env:OCN_HUB_PASSWORD" : undefined),
@@ -90,43 +104,67 @@ async function applyAuthLive(ctx: any, hub: Hub, cfg: NodeConfig): Promise<Conne
   try {
     const auth = await fetchAuth(hub)
     if (!auth) return null
-    // The plugin API cannot list/remove credentials, so connect with a stable
-    // label; the server keeps one credential per (integration, label) pair.
-    const result = await applyAuthMemory(auth, {
-      hubName: cfg.activeHub,
-      connect: (input) => ctx.integration.connect.key(input),
-    })
-    if (result.connected.length || result.errors.length) log("auth:applied", { connected: result.connected, errors: result.errors.map((e) => e.provider) })
-    return result
+    // Preferred: HTTP route can list+remove, so hub-labelled credentials are
+    // replaced instead of stacking on every refresh.
+    try {
+      const result = await applyAuthViaLocalServer(auth, cfg.activeHub)
+      if (result.connected.length || result.errors.length) log("auth:applied", { connected: result.connected, removed: result.removed.length, errors: result.errors.map((e) => e.provider) })
+      return result
+    } catch {
+      // Fallback: plugin-context connect only (no dedup available here).
+      const result = await applyAuthMemory(auth, {
+        hubName: cfg.activeHub,
+        connect: (input) => ctx.integration.connect.key(input),
+      })
+      if (result.connected.length || result.errors.length) log("auth:applied-fallback", { connected: result.connected, errors: result.errors.map((e) => e.provider) })
+      return result
+    }
   } catch (err) {
     log("auth:error", String(err))
     return null
   }
 }
 
-function applyModels(ctx: any, models: ModelEntry[]): boolean {
-  const allowed = new Set(models.map((m) => m.ref))
-  let removed = 0
-  void ctx.model.transform((editor: any) => {
-    for (const model of editor.list()) {
-      const ref = `${model.providerID}/${model.id}`
-      if (model.enabled === false) continue
-      if (!allowed.has(ref)) {
-        editor.update(model.providerID, model.id, (draft: any) => {
-          draft.enabled = false
-        })
-        removed++
-      }
+async function applyModels(ctx: any, models: import("./snapshot.ts").ModelEntry[], cfg: NodeConfig): Promise<void> {
+  if (!cfg.sync.models) return
+  if (!models.length) {
+    log("models:skipped", "hub model list empty (failed fetch?) — nothing disabled")
+    return
+  }
+  const applied = loadApplied(cfg)
+  const previous = applied?.nodeDisabledModels ?? []
+  const holder: { plan?: ModelPlan } = {}
+  await ctx.model.transform((editor: any) => {
+    const plan = planModelUpdates(editor.list(), models, previous)
+    for (const action of plan.actions) {
+      editor.update(action.providerID, action.id, (draft: any) => {
+        draft.enabled = action.enabled
+      })
     }
-  }).catch((err: unknown) => log("models:transform-error", String(err)))
-  return removed > 0
+    holder.plan = plan
+  })
+  const plan = holder.plan
+  if (!plan) return
+  const disabled = plan.actions.filter((a) => !a.enabled).length
+  const enabled = plan.actions.length - disabled
+  if (disabled || enabled) log("models:applied", { disabled, reEnabled: enabled, tracked: plan.disabledRefs.length })
+  if (JSON.stringify(plan.disabledRefs) !== JSON.stringify(previous)) {
+    saveApplied(cfg, {
+      skills: applied?.skills ?? current?.hashes.skills ?? "",
+      agents: applied?.agents ?? current?.hashes.agents ?? "",
+      commands: applied?.commands ?? current?.hashes.commands ?? "",
+      mcp: applied?.mcp ?? current?.hashes.mcp ?? "",
+      ...(applied?.config ? { config: applied.config } : {}),
+      nodeDisabledModels: plan.disabledRefs,
+    })
+  }
 }
 
-function maybeApplyConfig(cfg: NodeConfig, snapshot: Snapshot): boolean {
+async function maybeApplyConfig(hub: Hub, cfg: NodeConfig, snapshot: Snapshot): Promise<boolean> {
   if (cfg.sync.config !== "auto" || !snapshot.config) return false
   const previous = loadApplied(cfg)
   if (previous?.config === snapshot.hashes.config) return false
-  const result = applyConfig(snapshot, cfg, pluginSpec())
+  const result = await applyConfig(hub, snapshot, cfg, pluginSpec())
   saveApplied(cfg, {
     skills: snapshot.hashes.skills,
     agents: snapshot.hashes.agents,
@@ -159,10 +197,15 @@ export default Plugin.define({
       const snap = current
       if (!snap) return
       for (const skill of snap.skills) {
+        const skillId = safeName(String(skill.id))
+        if (!skillId) {
+          log("skills:skipped-unsafe-id", String(skill.id))
+          continue
+        }
         const entry: any = {
           id: skill.id,
           name: skill.name,
-          path: path.join(skillsDir(cfg), skill.id, "SKILL.md"),
+          path: path.join(skillsDir(cfg), skillId, "SKILL.md"),
           content: skill.content,
         }
         if (skill.description !== undefined) entry.description = skill.description
@@ -184,7 +227,7 @@ export default Plugin.define({
     if (current) {
       materialize(current, cfg)
       void applyAuthLive(ctx, hub, cfg)
-      applyModels(ctx, current.models ?? [])
+      void applyModels(ctx, current.models ?? [], cfg)
       if (cfg.sync.plugins) {
         try {
           applyPlugins(current, pluginSpec())
@@ -196,7 +239,7 @@ export default Plugin.define({
         const cached = current
         setTimeout(() => {
           try {
-            maybeApplyConfig(cfg, cached)
+            maybeApplyConfig(hub, cfg, cached)
           } catch (err) {
             log("config:auto-error", String(err))
           }
@@ -261,13 +304,12 @@ export default Plugin.define({
             log("auth:error", String(err))
           }
           try {
-            const removed = applyModels(ctx, fresh.models)
-            if (removed) log("models:restricted", { hubModels: fresh.models.length, disabled: removed })
+            await applyModels(ctx, fresh.models, cfg)
           } catch (err) {
             log("models:error", String(err))
           }
           try {
-            maybeApplyConfig(cfg, fresh)
+            maybeApplyConfig(hub, cfg, fresh)
           } catch (err) {
             log("config:auto-error", String(err))
           }
@@ -297,7 +339,7 @@ export default Plugin.define({
         execute: async () => {
           await refresh(true)
           if (current && pendingMemory(cfg, current).length) {
-            const result = await pushMemory(hub, cfg, current)
+            const result = await pushMemoryLocked(hub, cfg, current)
             saveSnapshot(cfg, current)
             if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
           }
@@ -330,7 +372,7 @@ export default Plugin.define({
             await ctx.session.synthetic({ sessionID, text: "opencode-node: no snapshot" })
             return
           }
-          const result = await pushMemory(hub, cfg, current)
+          const result = await pushMemoryLocked(hub, cfg, current)
           saveSnapshot(cfg, current)
           await ctx.session.synthetic({ sessionID, text: JSON.stringify(result, null, 2) })
         },
@@ -342,7 +384,7 @@ export default Plugin.define({
       sync: async () => {
         await refresh(true)
         if (current && pendingMemory(cfg, current).length) {
-          const result = await pushMemory(hub, cfg, current)
+          const result = await pushMemoryLocked(hub, cfg, current)
           saveSnapshot(cfg, current)
           if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
         }
@@ -350,7 +392,7 @@ export default Plugin.define({
       },
       push: async () => {
         if (!current) return { uploaded: [], conflicts: [], unchanged: 0, error: "no snapshot" }
-        const result = await pushMemory(hub, cfg, current)
+        const result = await pushMemoryLocked(hub, cfg, current)
         saveSnapshot(cfg, current)
         void rpc?.events.emit("updated", { kind: "push", summary: summary(cfg) })
         return result
@@ -359,7 +401,8 @@ export default Plugin.define({
     rpc = registration as any
 
     let timer: ReturnType<typeof setInterval> | undefined
-    if (cfg.memory.enabled && cfg.memory.push) {
+    if (cfg.memory.enabled && cfg.memory.push && !timerStarted) {
+      timerStarted = true
       const seconds = Math.max(5, cfg.memory.syncIntervalSeconds ?? 10)
       timer = setInterval(() => {
         if (!current) return
@@ -379,7 +422,10 @@ export default Plugin.define({
     else void refresh()
 
     return () => {
-      if (timer) clearInterval(timer)
+      if (timer) {
+        clearInterval(timer)
+        timerStarted = false
+      }
       rpc = null
       void registration.dispose()
     }

@@ -7,11 +7,24 @@ import { DATA_DIR, appliedFile, ensureHubData, skillsDir, snapshotFile, type Nod
 import { Hub } from "./hub.ts"
 import { ensurePluginEntries, ensurePluginSpec } from "./jsonc.ts"
 import { fetchAuth } from "./auth.ts"
+import { safeName, safeRel } from "./safe.ts"
 import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
 import type { Applied, AgentEntry, CommandEntry, MemoryFile, ModelEntry, PluginEntry, SkillEntry, Snapshot } from "./snapshot.ts"
 
 const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
 const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
+
+/**
+ * Replace inline secret values (apiKey and friends) with env-substitution
+ * placeholders so the snapshot on disk never contains key material. Values are
+ * restored from the live credential store instead (M11 auth sync).
+ */
+export function redactSecrets(text: string): string {
+  return text.replace(
+    /("(?:apiKey|api_key|apiKeyId|secret|token|password)"\s*:\s*)"[^"\n]*"/gi,
+    (_m, prefix: string) => `${prefix}"{redacted}"`,
+  )
+}
 
 export const LOCAL_CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode")
 
@@ -144,8 +157,10 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
           continue
         }
         if (content.length > 1024 * 1024 || !isText(content)) continue
+        const relCheck = safeRel(`${prefix}${name}`, { allowNested: true })
+        if (!relCheck) continue
         memory.push({
-          rel: `${prefix}${name}`,
+          rel: relCheck,
           agent: prefix.split("/")[0] ?? "",
           content,
           sha: memorySha(content),
@@ -239,6 +254,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
 
   // ---------- models ----------
   const models: ModelEntry[] = []
+
   const seenModel = new Set<string>()
   const pushModel = (m: any) => {
     if (!m?.id || !m?.providerID) return
@@ -252,16 +268,18 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     if (m.deprecated !== undefined) entry.deprecated = m.deprecated
     models.push(entry)
   }
-  try {
-    const listed = await hub.json("/api/model", loc)
-    for (const m of listed.data ?? []) pushModel(m)
-  } catch {}
+  if (cfg.sync.models) {
+    try {
+      const listed = await hub.json("/api/model", loc)
+      for (const m of listed.data ?? []) pushModel(m)
+    } catch {}
+  }
   models.sort((a, b) => a.ref.localeCompare(b.ref))
 
   let configFile: Snapshot["config"]
   for (const candidate of [".config/opencode/opencode.jsonc", ".config/opencode/opencode.json"]) {
     try {
-      const content = await hub.read(candidate)
+      const content = redactSecrets(await hub.read(candidate))
       configFile = { file: candidate, content, sha: sha256(content) }
       break
     } catch {}
@@ -352,17 +370,23 @@ export function materialize(snapshot: Snapshot, cfg: NodeConfig): MaterializeRes
   let changed = false
 
   for (const skill of snapshot.skills) {
-    const file = path.join(skillsDir(cfg), skill.id, "SKILL.md")
+    const skillId = safeName(String(skill.id))
+    if (!skillId) continue
+    const file = path.join(skillsDir(cfg), skillId, "SKILL.md")
     if (writeIfChanged(file, skill.content, stamp)) changed = true
   }
 
   for (const agent of snapshot.agents) {
-    const file = path.join(LOCAL_CONFIG_DIR, "agents", `${agent.id}.md`)
+    const agentId = safeName(String(agent.id))
+    if (!agentId) continue
+    const file = path.join(LOCAL_CONFIG_DIR, "agents", `${agentId}.md`)
     if (writeIfChanged(file, agentMarkdown(agent), stamp)) changed = true
   }
 
   for (const command of snapshot.commands) {
-    const file = path.join(LOCAL_CONFIG_DIR, "commands", command.name)
+    const commandName = safeName(String(command.name))
+    if (!commandName) continue
+    const file = path.join(LOCAL_CONFIG_DIR, "commands", commandName)
     if (writeIfChanged(file, command.content, stamp)) changed = true
   }
 
@@ -418,7 +442,9 @@ export function applyPlugins(snapshot: Snapshot, spec: string): PluginsResult {
   }
 
   for (const file of snapshot.pluginFiles ?? []) {
-    const dest = path.join(LOCAL_CONFIG_DIR, file.file)
+    const rel = safeRel(file.file, { allowNested: true, maxDepth: 6 })
+    if (!rel) continue
+    const dest = path.join(LOCAL_CONFIG_DIR, rel)
     if (writeIfChanged(dest, file.content, stamp)) result.filesWritten++
   }
 
@@ -427,7 +453,8 @@ export function applyPlugins(snapshot: Snapshot, spec: string): PluginsResult {
     try {
       const hubPkg = JSON.parse(snapshot.pluginPackage.content)
       const localPkg = fs.existsSync(dest) ? JSON.parse(fs.readFileSync(dest, "utf8")) : {}
-      const dependencies = { ...(hubPkg.dependencies ?? {}), ...(localPkg.dependencies ?? {}) }
+      // hub is the source of truth for its own deps; local-only deps stay
+      const dependencies = { ...(localPkg.dependencies ?? {}), ...(hubPkg.dependencies ?? {}) }
       const merged = { ...hubPkg, ...localPkg, dependencies }
       const text = JSON.stringify(merged, null, 2) + "\n"
       if (writeIfChanged(dest, text, stamp)) {
@@ -447,14 +474,21 @@ export interface ConfigResult {
 }
 
 /** Write the hub config (raw JSONC) locally, keeping the node plugin entry. */
-export function applyConfig(snapshot: Snapshot, cfg: NodeConfig, spec: string): ConfigResult {
+export async function applyConfig(hub: Hub, snapshot: Snapshot, cfg: NodeConfig, spec: string): Promise<ConfigResult> {
   const result: ConfigResult = { changed: false, wrote: [], removed: [] }
   if (!snapshot.config) return result
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")
 
+  // The snapshot stores a redacted copy; fetch the real config live so provider
+  // apiKey fields survive in the local file (mode 0600, credentials-only copy).
+  let content = snapshot.config.content
+  try {
+    content = await hub.read(snapshot.config.file)
+  } catch {}
+
   const target = path.join(LOCAL_CONFIG_DIR, "opencode.jsonc")
-  const content = ensurePluginSpec(snapshot.config.content, spec).text
-  if (writeIfChanged(target, content, stamp)) {
+  const text = ensurePluginSpec(content, spec).text
+  if (writeIfChanged(target, text, stamp)) {
     fs.chmodSync(target, 0o600)
     result.changed = true
     result.wrote.push(target)

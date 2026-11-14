@@ -38,12 +38,16 @@ test("removes previous hub-labelled credentials before connecting", async () => 
   const removed: string[] = []
   const result = await applyAuthMemory(auth({ "opencode-go": { key: "k" } }), {
     hubName: "work",
-    list: async () => [{ id: "c1", label: "opencode-node:work" }, { id: "c2", label: "API key" }],
+    list: async () => [
+      { id: "c1", label: "opencode-node:work", integrationID: "opencode-go" },
+      { id: "c2", label: "API key", integrationID: "opencode-go" },
+      { id: "c3", label: "opencode-node:work", integrationID: "other" },
+    ],
     remove: async (id) => {
       removed.push(id)
     },
     connect: async () => {},
   })
-  assert.deepEqual(removed, ["c1"])
+  assert.deepEqual(removed, ["c1"]) // c3 ima isti label ali drugi integration — ostaje
   assert.deepEqual(result.connected, ["opencode-go"])
 })

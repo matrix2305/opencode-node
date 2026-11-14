@@ -36,7 +36,7 @@ export interface ConnectResult {
 
 export type ConnectKey = (input: { integrationID: string; key: string; label?: string }) => Promise<unknown>
 export type RemoveCredential = (credentialID: string) => Promise<unknown>
-export type ListCredentials = () => Promise<Array<{ id: string; label?: string }>>
+export type ListCredentials = () => Promise<Array<{ id: string; label?: string; integrationID?: string }>>
 
 /**
  * Push hub credentials straight into the local OpenCode server (memory),
@@ -60,7 +60,7 @@ export async function applyAuthMemory(
       if (opts.list && opts.remove) {
         try {
           for (const cred of await opts.list()) {
-            if (cred.label === label) {
+            if (cred.label === label && (cred as any).integrationID === provider) {
               await opts.remove(cred.id)
               result.removed.push(cred.id)
             }
@@ -78,12 +78,21 @@ export async function applyAuthMemory(
   return result
 }
 
-function localServicePassword(): string | null {
-  if (process.env.OPENCODE_PASSWORD) return process.env.OPENCODE_PASSWORD
+export interface LocalService {
+  url: string
+  password: string
+}
+
+export function localService(): LocalService | null {
+  if (process.env.OPENCODE_PASSWORD && process.env.OPENCODE_LOCAL_URL) {
+    return { url: process.env.OPENCODE_LOCAL_URL, password: process.env.OPENCODE_PASSWORD }
+  }
   try {
     const file = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "opencode", "service.json")
     const data = JSON.parse(fs.readFileSync(file, "utf8"))
-    return typeof data.password === "string" ? data.password : null
+    const url = typeof data.url === "string" ? data.url.replace(/\/$/, "") : "http://127.0.0.1:49374"
+    const password = typeof data.password === "string" ? data.password : process.env.OPENCODE_PASSWORD
+    return password ? { url, password } : null
   } catch {
     return null
   }
@@ -91,17 +100,16 @@ function localServicePassword(): string | null {
 
 /** CLI variant: apply credentials through the local server's HTTP API. */
 export async function applyAuthViaLocalServer(auth: AuthEntries, hubName: string): Promise<ConnectResult> {
-  const password = localServicePassword()
-  if (!password) throw new Error("local OpenCode server password not found (is the service running?)")
-
-  const base = process.env.OPENCODE_LOCAL_URL ?? "http://127.0.0.1:49374"
+  const service = localService()
+  if (!service) throw new Error("local OpenCode server not found (is the service running?)")
+  const { url: base, password } = service
   const authHeader = { Authorization: "Basic " + Buffer.from(`opencode:${password}`).toString("base64") }
 
   const list: ListCredentials = async () => {
     const res = await fetch(`${base}/api/credential`, { headers: authHeader })
     if (!res.ok) throw new Error(`credential list -> ${res.status}`)
     const data = await res.json()
-    return (data.data ?? data).map((c: any) => ({ id: c.id, label: c.label }))
+    return (data.data ?? data).map((c: any) => ({ id: c.id, label: c.label, integrationID: c.integrationID }))
   }
   const remove: RemoveCredential = async (id) => {
     const res = await fetch(`${base}/api/credential/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeader })

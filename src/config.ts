@@ -27,6 +27,7 @@ export interface NodeConfig {
     memory: boolean
     plugins: boolean
     auth: boolean
+    models: boolean
   }
   paths: {
     remoteRoot: string
@@ -115,7 +116,7 @@ export function defaultConfig(hub: string, passwordRef?: string, name = "default
     hubs: { [safe]: entry },
     hub: entry,
     node: { id: os.hostname() },
-    sync: { skills: true, agents: true, commands: true, mcp: true, config: true, memory: false, plugins: true, auth: true },
+    sync: { skills: true, agents: true, commands: true, mcp: true, config: true, memory: false, plugins: true, auth: true, models: true },
     paths: { remoteRoot: "/home/matrix2305", agentsRoot: "agents" },
     memory: {
       enabled: true,

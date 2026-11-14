@@ -6,6 +6,7 @@ import path from "node:path"
 import { DATA_DIR, type NodeConfig } from "./config.ts"
 import type { Hub } from "./hub.ts"
 import type { MemoryFile, Snapshot } from "./snapshot.ts"
+import { safeRel } from "./safe.ts"
 
 const SKIP_DIRS = new Set([".git", "node_modules", "skills", ".clawhub", ".dreams"])
 const SKIP_SUFFIX = [".conflict-"]
@@ -78,7 +79,9 @@ export function materializeMemory(snapshot: Snapshot, cfg: NodeConfig): { writte
   let keptLocal = 0
 
   for (const entry of snapshot.memory ?? []) {
-    const dest = path.join(root, entry.rel)
+    const rel = safeRel(entry.rel, { allowNested: true, maxDepth: 10 })
+    if (!rel) continue
+    const dest = path.join(root, rel)
     const content = rewriteForNode(entry.content, cfg)
     let local: string | undefined
     try {
