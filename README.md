@@ -73,6 +73,21 @@ oc-node restart          # opencode service restart
 The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 `node src/cli.ts <command>` (Node 23+).
 
+## Provider credentials (`auth.json`)
+
+`sync.auth` (default on) merges the hub's saved provider credentials (from
+`~/.local/share/opencode/auth.json` on the hub) into the local `auth.json`
+during `init` and `pull`:
+
+- hub entries win for the providers the hub defines — this is what makes
+  config-synced providers (`opencode-go`, `zai-coding-plan`, …) actually work
+  with their API keys;
+- local-only credentials are never removed;
+- the file keeps mode `0600`, a backup is written before every change, and
+  credentials are never logged.
+
+Restart OpenCode after a merge for new providers to become usable.
+
 ## Plugins
 
 `sync.plugins` (default on) pulls the plugin layer from the hub during
@@ -139,6 +154,7 @@ records `applied.config`, backs up every overwritten file, and logs
 | Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved, `off`/`manual`/`auto` modes |
 | Memory | `~/agents/<agent>/` folder mirror with conflict-safe push (no memory tools; the hub memory plugin does that) |
 | Plugins | hub `plugins` list merged into the local config, `plugin/` files copied, `package.json` dependencies merged |
+| Auth | hub `auth.json` provider credentials merged into the local one (hub wins for its providers, local-only entries kept, 0600, backup) |
 
 ## TUI
 

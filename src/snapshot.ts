@@ -53,6 +53,8 @@ export interface Snapshot {
   plugins: PluginEntry[]
   pluginFiles: Array<{ file: string; content: string; sha: string }>
   pluginPackage?: { content: string; sha: string }
+  /** provider credentials from the hub's auth.json; never logged */
+  auth?: { entries: Record<string, { type?: string; key?: string }>; sha: string }
   config?: { file: string; content: string; sha: string }
   extras: Array<{ file: string; content: string; sha: string }>
   hashes: {
@@ -62,6 +64,7 @@ export interface Snapshot {
     mcp: string
     memory: string
     plugins: string
+    auth?: string
     config?: string
   }
 }

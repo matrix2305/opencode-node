@@ -21,6 +21,11 @@ First working release of the OpenCode node plugin.
   `.conflict-<node>-<timestamp>`.
 - Background push timer (default 5 minutes).
 
+### Auth
+
+- Hub `auth.json` credentials merged into the local file during `init`/`pull`
+  (`sync.auth`, default on; hub wins for its providers; local-only kept).
+
 ### Plugins
 
 - Hub plugin list merged into the local config during `init` and `pull`

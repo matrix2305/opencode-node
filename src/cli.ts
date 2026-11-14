@@ -20,7 +20,7 @@ import {
 import { Hub } from "./hub.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
-import { applyConfig, applyPlugins, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
+import { applyAuth, applyConfig, applyPlugins, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
 import type { Snapshot } from "./snapshot.ts"
 
 function localConfigDir(): string {
@@ -117,6 +117,7 @@ function printSummary(snapshot: Snapshot | null) {
   info(`mcp:      ${Object.keys(snapshot.mcp).join(", ") || "-"}`)
   info(`memory:   ${snapshot.memory?.length ?? 0} files`)
   info(`plugins:  ${snapshot.plugins?.length ?? 0} entries, ${snapshot.pluginFiles?.length ?? 0} local file(s)`)
+  info(`auth:     ${Object.keys(snapshot.auth?.entries ?? {}).length} provider credential(s) on the hub`)
   info(`config:   ${snapshot.config ? snapshot.config.file : "-"}`)
 }
 
@@ -162,6 +163,10 @@ function cmdInit() {
         if (plugins.configChanged) info("plugins:  hub plugin list merged into local config")
         if (plugins.filesWritten) info(`plugins:  ${plugins.filesWritten} local plugin file(s) written`)
       }
+      if (cfg.sync.auth) {
+        const auth = applyAuth(snapshot)
+        if (auth.merged.length) info(`auth:     ${auth.merged.length} provider credential(s) merged (${auth.merged.join(", ")})`)
+      }
       let configChanged = false
       if (flag("--config")) {
         info("warning:  local opencode.jsonc will be replaced by the hub config (backup kept)")
@@ -188,6 +193,10 @@ function cmdPull() {
     if (cfg.sync.plugins) {
       pluginResult = applyPlugins(snapshot, pluginSpec())
     }
+    let authResult
+    if (cfg.sync.auth) {
+      authResult = applyAuth(snapshot)
+    }
     let configChanged = false
     if (flag("--config")) {
       const written = applyConfig(snapshot, cfg, pluginSpec())
@@ -201,6 +210,10 @@ function cmdPull() {
     if (pluginResult) {
       info(`plugins:  ${pluginResult.pluginCount} from hub, ${pluginResult.filesWritten} file(s) written${pluginResult.configChanged ? ", config updated" : ""}`)
       if (pluginResult.configChanged || pluginResult.filesWritten) info("next:     restart OpenCode to install/load the synced plugins")
+    }
+    if (authResult) {
+      if (authResult.merged.length) info(`auth:     ${authResult.merged.length} credential(s) merged (${authResult.merged.join(", ")}) · restart to use them`)
+      else info("auth:     already up to date")
     }
     if (configChanged) info("next:     restart OpenCode to apply config/providers (oc-node restart)")
     if (result.changed) info("next:     run `oc-node restart` (or `opencode reload`) to apply agents/commands")
