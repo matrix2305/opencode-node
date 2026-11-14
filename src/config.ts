@@ -33,9 +33,9 @@ export interface NodeConfig {
   memory: {
     enabled: boolean
     localRoot: string
-    maxInjectBytes: number
     push: boolean
-    pushIntervalSeconds: number
+    /** how often pending local changes are scanned and pushed (default 10s) */
+    syncIntervalSeconds: number
   }
   cacheSeconds: number
 }
@@ -118,9 +118,8 @@ export function defaultConfig(hub: string, passwordRef?: string, name = "default
     memory: {
       enabled: true,
       localRoot: path.join(os.homedir(), "agents"),
-      maxInjectBytes: 16000,
       push: true,
-      pushIntervalSeconds: 300,
+      syncIntervalSeconds: 10,
     },
     cacheSeconds: 300,
   }

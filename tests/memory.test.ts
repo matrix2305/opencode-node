@@ -5,15 +5,7 @@ import path from "node:path"
 import test from "node:test"
 
 import type { NodeConfig } from "../src/config.ts"
-import {
-  buildMemoryBlock,
-  materializeMemory,
-  rewriteForHub,
-  rewriteForNode,
-  searchMemory,
-  sha,
-  storeMemory,
-} from "../src/memory.ts"
+import { materializeMemory, pendingMemory, rewriteForHub, rewriteForNode, sha } from "../src/memory.ts"
 import type { Snapshot } from "../src/snapshot.ts"
 
 function tmp(prefix: string): string {
@@ -29,7 +21,7 @@ function config(localRoot: string): NodeConfig {
     node: { id: "testnode" },
     sync: { skills: true, agents: true, commands: true, mcp: true, config: false, memory: true },
     paths: { remoteRoot: "/home/hub", agentsRoot: "agents" },
-    memory: { enabled: true, localRoot, maxInjectBytes: 4000, push: false, pushIntervalSeconds: 300 },
+    memory: { enabled: true, localRoot, push: false, syncIntervalSeconds: 10 },
     cacheSeconds: 0,
   }
 }
@@ -84,32 +76,15 @@ test("materialize writes unchanged and new files", () => {
   assert.equal(fs.readFileSync(path.join(root, "a", "MEMORY.md"), "utf8"), raw)
 })
 
-test("store and search memory", () => {
+test("detects pending local memory changes", () => {
   const root = tmp("ocn-mem-")
   const cfg = config(root)
-  storeMemory(cfg, "prefer pnpm over npm", "genesis2")
-  const matches = searchMemory(cfg, "pnpm", "genesis2")
-  assert.equal(matches.length, 1)
-  assert.equal(matches[0].path, "genesis2/MEMORY.md")
-})
-
-test("builds a capped memory block for an agent", () => {
-  const root = tmp("ocn-mem-")
-  const cfg = config(root)
-  const raw = `soul\nworkspace: /home/hub/agents/genesis2\n${"x".repeat(5000)}`
-  fs.mkdirSync(path.join(root, "genesis2"), { recursive: true })
-  fs.writeFileSync(path.join(root, "genesis2", "SOUL.md"), rewriteForNode(raw, cfg))
+  const raw = "hub memory\n"
+  const local = rewriteForNode(raw, cfg)
+  fs.mkdirSync(path.join(root, "a"), { recursive: true })
+  fs.writeFileSync(path.join(root, "a", "MEMORY.md"), "local edit\n")
   const snap = snapshot([
-    { rel: "genesis2/SOUL.md", agent: "genesis2", content: raw, sha: sha(raw), localSha: sha(rewriteForNode(raw, cfg)) },
+    { rel: "a/MEMORY.md", agent: "a", content: raw, sha: sha(raw), localSha: sha(local) },
   ])
-  const block = buildMemoryBlock("genesis2", "/Users/me/Documents/genesis2", cfg, snap)
-  assert.ok(block)
-  assert.match(block!, /<opencode-node-memory agent="genesis2"/)
-  assert.ok(block!.length <= 4200)
-})
-
-test("returns no block for an unknown agent", () => {
-  const cfg = config(tmp("ocn-mem-"))
-  const block = buildMemoryBlock("build", "/tmp", cfg, snapshot([]))
-  assert.equal(block, null)
+  assert.deepEqual(pendingMemory(cfg, snap), ["a/MEMORY.md"])
 })

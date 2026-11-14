@@ -149,7 +149,10 @@ curl -u opencode:<password> -X POST -H 'Content-Type: application/json' \
   'http://127.0.0.1:49374/api/rpc/matrix2305.opencode-node/status?location[directory]=/home/me'
 ```
 
-## Memory
+## Memory (folder sync only)
+
+Memory is a **folder mirror**, not a memory implementation. The hub config
+installs the memory plugin; that plugin owns search, storage and prompts.
 
 - Hub workspace `~/agents/<agent>/` is mirrored to `~/agents/<agent>/` on the
   node (paths rewritten between `/home/matrix2305/agents` and the local root).
@@ -157,11 +160,11 @@ curl -u opencode:<password> -X POST -H 'Content-Type: application/json' \
 - Push is three-way: hub sha vs local hash vs last synced `localSha`. If both
   sides changed, a `.conflict-<node>-<timestamp>` copy is written and the hub is
   left untouched.
-- Injection: the `context` (and `compaction`) hook adds a
-  `<opencode-node-memory agent="...">` block for the session's agent, capped at
-  `memory.maxInjectBytes` (16 KB by default).
-- Tools: `memory_search`, `memory_get`, `memory_store`, `memory_push`.
-- A background timer pushes pending changes every `pushIntervalSeconds` (300s).
+- A 10 s scan (`memory.syncIntervalSeconds`) pushes pending changes;
+  `node.sync` and RPC `sync` pull and then push; `oc-node push` and RPC `push`
+  are manual.
+- No custom memory tools and no prompt injection. The only tools this plugin
+  exposes are `status` and `sync`.
 
 ## Runtime constraints found in 2.3.0
 

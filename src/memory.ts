@@ -171,82 +171,6 @@ export async function pushMemory(hub: Hub, cfg: NodeConfig, snapshot: Snapshot):
   return result
 }
 
-function readMemoryFile(root: string, rel: string): string | undefined {
-  try {
-    return fs.readFileSync(path.join(root, rel), "utf8")
-  } catch {
-    return undefined
-  }
-}
-
-function truncate(text: string, limit: number): string {
-  if (text.length <= limit) return text
-  return text.slice(0, limit) + `\n\n… [truncated ${text.length - limit} chars]`
-}
-
-export function buildMemoryBlock(agent: string, directory: string, cfg: NodeConfig, snapshot: Snapshot): string | null {
-  if (!cfg.memory.enabled) return null
-  const files = (snapshot.memory ?? []).filter((m) => m.agent === agent)
-  if (!files.length) return null
-  const root = memoryRoot(cfg)
-  const project = path.basename(directory || "")
-  const order = ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md", "MEMORY.md"]
-  const candidates: Array<{ label: string; rel: string }> = []
-  for (const name of order) {
-    const rel = `${agent}/${name}`
-    if (files.some((f) => f.rel === rel)) candidates.push({ label: name, rel })
-  }
-  if (project) {
-    const projectRel = `${agent}/memory/projects/${project}.md`
-    if (files.some((f) => f.rel === projectRel)) candidates.push({ label: `project:${project}`, rel: projectRel })
-  }
-  const today = new Date().toISOString().slice(0, 10)
-  const dailyRel = `${agent}/memory/${today}.md`
-  if (files.some((f) => f.rel === dailyRel)) candidates.push({ label: `memory:${today}`, rel: dailyRel })
-  if (!candidates.length) return null
-
-  let budget = cfg.memory.maxInjectBytes
-  const parts: string[] = []
-  for (const candidate of candidates) {
-    if (budget <= 0) break
-    const content = readMemoryFile(root, candidate.rel)
-    if (!content) continue
-    const slice = truncate(content, Math.min(budget, Math.max(1000, Math.floor(cfg.memory.maxInjectBytes / 2))))
-    parts.push(`### ${candidate.label}\n${slice}`)
-    budget -= slice.length
-  }
-  if (!parts.length) return null
-  return `<opencode-node-memory agent="${agent}" source="hub">\n${parts.join("\n\n")}\n</opencode-node-memory>`
-}
-
-export interface MemoryMatch {
-  path: string
-  line: number
-  text: string
-}
-
-export function searchMemory(cfg: NodeConfig, query: string, agent?: string, limit = 20): MemoryMatch[] {
-  const root = memoryRoot(cfg)
-  const needle = query.toLowerCase()
-  const matches: MemoryMatch[] = []
-  for (const file of listLocalMemory(agent ? path.join(root, agent) : root)) {
-    let content: string
-    try {
-      content = fs.readFileSync(file, "utf8")
-    } catch {
-      continue
-    }
-    const lines = content.split(/\r?\n/)
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(needle)) {
-        matches.push({ path: path.relative(root, file).split(path.sep).join("/"), line: i + 1, text: lines[i].trim().slice(0, 300) })
-        if (matches.length >= limit) return matches
-      }
-    }
-  }
-  return matches
-}
-
 export function pendingMemory(cfg: NodeConfig, snapshot: Snapshot): string[] {
   const root = memoryRoot(cfg)
   const known = new Map((snapshot.memory ?? []).map((m) => [m.rel, m]))
@@ -263,15 +187,4 @@ export function pendingMemory(cfg: NodeConfig, snapshot: Snapshot): string[] {
     if (!entry || sha(local) !== entry.localSha) out.push(rel)
   }
   return out
-}
-
-export function storeMemory(cfg: NodeConfig, text: string, agent: string, file = "MEMORY.md"): string {
-  const root = memoryRoot(cfg)
-  const rel = `${agent}/${file}`.replace(/\/+/g, "/")
-  const dest = path.join(root, rel)
-  fs.mkdirSync(path.dirname(dest), { recursive: true })
-  const stamp = new Date().toISOString()
-  const entry = `\n\n## ${stamp}\n${text.trim()}\n`
-  fs.appendFileSync(dest, entry)
-  return rel
 }

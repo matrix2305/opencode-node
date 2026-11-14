@@ -5,7 +5,7 @@ import path from "node:path"
 import { DATA_DIR, LOG_FILE, configMode, defaultConfig, loadConfig, pluginSpec, resolvePassword, skillsDir, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { NodeRpc } from "./rpc.ts"
-import { buildMemoryBlock, memoryRoot, pendingMemory, pushMemory, searchMemory, storeMemory } from "./memory.ts"
+import { pendingMemory, pushMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
 import {
   applyConfig,
@@ -123,18 +123,6 @@ export default Plugin.define({
       }
     })
 
-    await ctx.session.hook("context", (event: any) => {
-      if (!current) return
-      const block = buildMemoryBlock(String(event.agent ?? ""), ctx.location.directory, cfg, current)
-      if (block && Array.isArray(event.system)) event.system.push({ type: "text", text: block })
-    })
-
-    await ctx.session.hook("compaction", (event: any) => {
-      if (!current) return
-      const block = buildMemoryBlock(String(event.agent ?? ""), ctx.location.directory, cfg, current)
-      if (block && Array.isArray(event.system)) event.system.push({ type: "text", text: block })
-    })
-
     await ctx.mcp.transform((editor) => {
       const snap = current
       if (!snap) return
@@ -225,66 +213,16 @@ export default Plugin.define({
       })
       editor.add({
         name: "sync",
-        description: "Pull the latest agents, skills, commands, MCP servers and memory from the hub",
+        description: "Pull the latest setup from the hub and push pending memory changes",
         input: { type: "object", properties: {}, additionalProperties: false },
         execute: async () => {
           await refresh(true)
-          return { content: JSON.stringify(summary(cfg), null, 2) }
-        },
-      })
-      editor.add({
-        name: "memory_search",
-        description: "Search local memory files synced from the hub",
-        input: {
-          type: "object",
-          properties: { query: { type: "string" }, agent: { type: "string" }, limit: { type: "number" } },
-          required: ["query"],
-          additionalProperties: false,
-        },
-        execute: async (input: any) => ({
-          content: JSON.stringify(searchMemory(cfg, input.query, input.agent, input.limit ?? 20), null, 2),
-        }),
-      })
-      editor.add({
-        name: "memory_get",
-        description: "Read a memory file by its path relative to the agents root",
-        input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
-        execute: async (input: any) => {
-          try {
-            const fsmod = await import("node:fs")
-            const file = path.join(memoryRoot(cfg), input.path)
-            return { content: fsmod.readFileSync(file, "utf8") }
-          } catch (err) {
-            return { content: `error: ${String(err)}` }
+          if (current && pendingMemory(cfg, current).length) {
+            const result = await pushMemory(hub, cfg, current)
+            saveSnapshot(cfg, current)
+            if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
           }
-        },
-      })
-      editor.add({
-        name: "memory_store",
-        description: "Append a note to an agent's memory file (MEMORY.md by default)",
-        input: {
-          type: "object",
-          properties: { text: { type: "string" }, agent: { type: "string" }, file: { type: "string" } },
-          required: ["text"],
-          additionalProperties: false,
-        },
-        execute: async (input: any, context: any) => {
-          const agent = input.agent ?? String(context?.agent ?? "")
-          if (!agent) return { content: "error: no agent; pass agent explicitly" }
-          const rel = storeMemory(cfg, input.text, agent, input.file ?? "MEMORY.md")
-          return { content: `stored in ${rel}` }
-        },
-      })
-      editor.add({
-        name: "memory_push",
-        description: "Push locally changed memory files back to the hub (conflict-safe)",
-        input: { type: "object", properties: {}, additionalProperties: false },
-        execute: async () => {
-          if (!current) return { content: "no snapshot" }
-          const result = await pushMemory(hub, cfg, current)
-          saveSnapshot(cfg, current)
-          void rpc?.events.emit("updated", { kind: "push", summary: summary(cfg) })
-          return { content: JSON.stringify(result, null, 2) }
+          return { content: JSON.stringify(summary(cfg), null, 2) }
         },
       })
     })
@@ -324,6 +262,11 @@ export default Plugin.define({
       status: async () => summary(cfg),
       sync: async () => {
         await refresh(true)
+        if (current && pendingMemory(cfg, current).length) {
+          const result = await pushMemory(hub, cfg, current)
+          saveSnapshot(cfg, current)
+          if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
+        }
         return summary(cfg)
       },
       push: async () => {
@@ -338,8 +281,10 @@ export default Plugin.define({
 
     let timer: ReturnType<typeof setInterval> | undefined
     if (cfg.memory.enabled && cfg.memory.push) {
+      const seconds = Math.max(5, cfg.memory.syncIntervalSeconds ?? 10)
       timer = setInterval(() => {
         if (!current) return
+        if (!pendingMemory(cfg, current).length) return
         void pushMemory(hub, cfg, current)
           .then((result) => {
             saveSnapshot(cfg, current!)
@@ -347,7 +292,7 @@ export default Plugin.define({
             if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
           })
           .catch((err) => log("memory:push-error", String(err)))
-      }, Math.max(60, cfg.memory.pushIntervalSeconds) * 1000)
+      }, seconds * 1000)
       timer.unref?.()
     }
 
