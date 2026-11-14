@@ -38,6 +38,8 @@ function formatStatus(status: any): string {
     `mcp:      ${counts.mcp ?? 0}`,
     `memory:   ${memory.files ?? 0} files${memory.pending?.length ? ` (${memory.pending.length} pending)` : ""}`,
     `plugins:  ${counts.plugins ?? 0} entries${counts.pluginFiles ? `, ${counts.pluginFiles} file(s)` : ""}`,
+    `models:   ${counts.models ?? 0} from hub (local-only disabled)`,
+
   ]
   if (status?.configDrift) lines.push("config:   drift (oc-node pull --config)")
   return lines.join("\n")

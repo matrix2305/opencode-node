@@ -5,6 +5,7 @@ import path from "node:path"
 import { DATA_DIR, LOG_FILE, configMode, defaultConfig, loadConfig, pluginSpec, resolvePassword, skillsDir, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { applyAuthMemory, fetchAuth, type ConnectResult } from "./auth.ts"
+import type { ModelEntry } from "./snapshot.ts"
 import { NodeRpc } from "./rpc.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
@@ -71,6 +72,7 @@ function summary(cfg: NodeConfig) {
           mcp: Object.keys(current.mcp).length,
           plugins: current.plugins?.length ?? 0,
           pluginFiles: current.pluginFiles?.length ?? 0,
+          models: current.models?.length ?? 0,
         }
       : null,
     applied,
@@ -100,6 +102,24 @@ async function applyAuthLive(ctx: any, hub: Hub, cfg: NodeConfig): Promise<Conne
     log("auth:error", String(err))
     return null
   }
+}
+
+function applyModels(ctx: any, models: ModelEntry[]): boolean {
+  const allowed = new Set(models.map((m) => m.ref))
+  let removed = 0
+  void ctx.model.transform((editor: any) => {
+    for (const model of editor.list()) {
+      const ref = `${model.providerID}/${model.id}`
+      if (model.enabled === false) continue
+      if (!allowed.has(ref)) {
+        editor.update(model.providerID, model.id, (draft: any) => {
+          draft.enabled = false
+        })
+        removed++
+      }
+    }
+  }).catch((err: unknown) => log("models:transform-error", String(err)))
+  return removed > 0
 }
 
 function maybeApplyConfig(cfg: NodeConfig, snapshot: Snapshot): boolean {
@@ -164,6 +184,7 @@ export default Plugin.define({
     if (current) {
       materialize(current, cfg)
       void applyAuthLive(ctx, hub, cfg)
+      applyModels(ctx, current.models ?? [])
       if (cfg.sync.plugins) {
         try {
           applyPlugins(current, pluginSpec())
@@ -238,6 +259,12 @@ export default Plugin.define({
             await applyAuthLive(ctx, hub, cfg)
           } catch (err) {
             log("auth:error", String(err))
+          }
+          try {
+            const removed = applyModels(ctx, fresh.models)
+            if (removed) log("models:restricted", { hubModels: fresh.models.length, disabled: removed })
+          } catch (err) {
+            log("models:error", String(err))
           }
           try {
             maybeApplyConfig(cfg, fresh)

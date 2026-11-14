@@ -26,6 +26,17 @@ export interface CommandEntry {
   sha: string
 }
 
+export interface ModelEntry {
+  providerID: string
+  id: string
+  name?: string
+  /** full provider-scoped reference, e.g. "opencode-go/deepseek-v4.1-flash" */
+  ref: string
+  hidden?: boolean
+  enabled?: boolean
+  deprecated?: boolean
+}
+
 export interface PluginEntry {
   /** package spec or local path used for de-duplication */
   spec: string
@@ -51,6 +62,7 @@ export interface Snapshot {
   mcp: Record<string, unknown>
   memory: MemoryFile[]
   plugins: PluginEntry[]
+  models: ModelEntry[]
   pluginFiles: Array<{ file: string; content: string; sha: string }>
   pluginPackage?: { content: string; sha: string }
   /** how many provider credentials the hub has (keys are never persisted) */
@@ -64,6 +76,7 @@ export interface Snapshot {
     mcp: string
     memory: string
     plugins: string
+    models: string
     auth?: string
     config?: string
   }

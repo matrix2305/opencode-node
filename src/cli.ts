@@ -118,6 +118,7 @@ function printSummary(snapshot: Snapshot | null) {
   info(`mcp:      ${Object.keys(snapshot.mcp).join(", ") || "-"}`)
   info(`memory:   ${snapshot.memory?.length ?? 0} files`)
   info(`plugins:  ${snapshot.plugins?.length ?? 0} entries, ${snapshot.pluginFiles?.length ?? 0} local file(s)`)
+  info(`models:   ${snapshot.models?.length ?? 0} from the hub (local-only models are disabled at runtime)`)
   info(`auth:     ${snapshot.authCount ?? 0} provider credential(s) on the hub (applied to the local server, not stored in files)`)
   info(`config:   ${snapshot.config ? snapshot.config.file : "-"}`)
 }

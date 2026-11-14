@@ -21,6 +21,11 @@ First working release of the OpenCode node plugin.
   `.conflict-<node>-<timestamp>`.
 - Background push timer (default 5 minutes).
 
+### Models
+
+- Hub model list pulled into the snapshot and enforced at runtime
+  (`ctx.model.transform`): local-only models disabled, hub parity in the picker.
+
 ### Auth
 
 - Hub provider credentials connected **live** into the local server's credential

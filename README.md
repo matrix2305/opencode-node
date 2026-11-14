@@ -73,6 +73,14 @@ oc-node restart          # opencode service restart
 The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 `node src/cli.ts <command>` (Node 23+).
 
+## Model list
+
+`pull` fetches the hub's model list (`/api/model`) and the server plugin applies
+it with a model transform: any local model that the hub does not have is set
+`enabled: false`, so the picker shows exactly the hub's models. Disabled models
+are not deleted — if the hub re-adds them later, the next refresh re-enables
+them.
+
 ## Provider credentials (live, no files)
 
 `sync.auth` (default on) pushes the hub's provider credentials **straight into
@@ -153,6 +161,7 @@ records `applied.config`, backs up every overwritten file, and logs
 | Memory | `~/agents/<agent>/` folder mirror with conflict-safe push (no memory tools; the hub memory plugin does that) |
 | Plugins | hub `plugins` list merged into the local config, `plugin/` files copied, `package.json` dependencies merged |
 | Auth | hub provider credentials connected **live** into the local OpenCode server (`connect/key`); never written to files |
+| Models | hub model list applied at runtime; local-only models are disabled (`enabled: false`), nothing deleted |
 
 ## TUI
 

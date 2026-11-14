@@ -8,7 +8,7 @@ import { Hub } from "./hub.ts"
 import { ensurePluginEntries, ensurePluginSpec } from "./jsonc.ts"
 import { fetchAuth } from "./auth.ts"
 import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
-import type { Applied, AgentEntry, CommandEntry, MemoryFile, PluginEntry, SkillEntry, Snapshot } from "./snapshot.ts"
+import type { Applied, AgentEntry, CommandEntry, MemoryFile, ModelEntry, PluginEntry, SkillEntry, Snapshot } from "./snapshot.ts"
 
 const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
 const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
@@ -237,6 +237,27 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     }
   }
 
+  // ---------- models ----------
+  const models: ModelEntry[] = []
+  const seenModel = new Set<string>()
+  const pushModel = (m: any) => {
+    if (!m?.id || !m?.providerID) return
+    const ref = `${m.providerID}/${m.id}`
+    if (seenModel.has(ref)) return
+    seenModel.add(ref)
+    const entry: ModelEntry = { providerID: m.providerID, id: m.id, ref }
+    if (m.name !== undefined) entry.name = m.name
+    if (m.hidden !== undefined) entry.hidden = m.hidden
+    if (m.enabled !== undefined) entry.enabled = m.enabled
+    if (m.deprecated !== undefined) entry.deprecated = m.deprecated
+    models.push(entry)
+  }
+  try {
+    const listed = await hub.json("/api/model", loc)
+    for (const m of listed.data ?? []) pushModel(m)
+  } catch {}
+  models.sort((a, b) => a.ref.localeCompare(b.ref))
+
   let configFile: Snapshot["config"]
   for (const candidate of [".config/opencode/opencode.jsonc", ".config/opencode/opencode.json"]) {
     try {
@@ -264,6 +285,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     mcp,
     memory,
     plugins: pluginEntries,
+    models,
     pluginFiles,
     ...(pluginPackage ? { pluginPackage } : {}),
     ...(authCount !== undefined ? { authCount } : {}),
@@ -276,6 +298,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       mcp: sha256(JSON.stringify(mcp)),
       memory: hashList(memory),
       plugins: sha256(JSON.stringify(pluginEntries.map((p) => p.value).concat(pluginFiles.map((f) => f.sha)))),
+      models: sha256(JSON.stringify(models.map((m) => m.ref))),
       ...(authSha ? { auth: authSha } : {}),
 
       ...(configFile ? { config: configFile.sha } : {}),
