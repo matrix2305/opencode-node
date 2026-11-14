@@ -1,7 +1,7 @@
 {
   "name": "@matrix2305/opencode-node",
   "version": "0.1.0",
-  "description": "OpenCode V2 node plugin: load agents, skills, commands, MCP servers and file-based memory from a remote OpenCode hub.",
+  "description": "OpenCode V2 node plugin: full setup sync (agents, skills, commands, plugins, models, MCP, credentials, memory) from a remote OpenCode hub.",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -14,7 +14,8 @@
     "dist",
     "docs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup",
