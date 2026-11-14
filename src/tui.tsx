@@ -37,6 +37,7 @@ function formatStatus(status: any): string {
     `commands: ${counts.commands ?? 0}`,
     `mcp:      ${counts.mcp ?? 0}`,
     `memory:   ${memory.files ?? 0} files${memory.pending?.length ? ` (${memory.pending.length} pending)` : ""}`,
+    `plugins:  ${counts.plugins ?? 0} entries${counts.pluginFiles ? `, ${counts.pluginFiles} file(s)` : ""}`,
   ]
   if (status?.configDrift) lines.push("config:   drift (oc-node pull --config)")
   return lines.join("\n")
@@ -83,6 +84,7 @@ export default Plugin.define({
       else void refresh()
       if (data.kind === "sync") toast("setup synced from hub", "success")
       if (data.kind === "config") toast("config updated · restart OpenCode", "warning")
+      if (data.kind === "plugins") toast("plugins synced · restart OpenCode", "warning")
       if (data.kind === "push") {
         const summary: any = data.summary ?? {}
         const pending: string[] = summary?.memory?.pending ?? []
@@ -94,6 +96,10 @@ export default Plugin.define({
 
     const footer = context.ui.slot({
       append: "home.footer.status",
+      render: () => <text fg={context.theme.text.base}>{footerLine(status())}</text>,
+    })
+    const promptFooter = context.ui.slot({
+      append: "prompt.footer.status",
       render: () => <text fg={context.theme.text.base}>{footerLine(status())}</text>,
     })
 
@@ -154,6 +160,7 @@ export default Plugin.define({
       clearInterval(timer)
       unsubscribe()
       footer?.()
+      promptFooter?.()
     }
   },
 })

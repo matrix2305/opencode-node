@@ -9,6 +9,7 @@ import { pendingMemory, pushMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
 import {
   applyConfig,
+  applyPlugins,
   loadApplied,
   loadSnapshot,
   materialize,
@@ -62,7 +63,14 @@ function summary(cfg: NodeConfig) {
     lastPull: current ? new Date(current.fetchedAt).toISOString() : null,
     cacheAgeSeconds: current ? Math.round((Date.now() - current.fetchedAt) / 1000) : null,
     counts: current
-      ? { skills: current.skills.length, agents: current.agents.length, commands: current.commands.length, mcp: Object.keys(current.mcp).length }
+      ? {
+          skills: current.skills.length,
+          agents: current.agents.length,
+          commands: current.commands.length,
+          mcp: Object.keys(current.mcp).length,
+          plugins: current.plugins?.length ?? 0,
+          pluginFiles: current.pluginFiles?.length ?? 0,
+        }
       : null,
     applied,
     configMode: configMode(cfg),
@@ -135,6 +143,13 @@ export default Plugin.define({
     let applied = false
     if (current) {
       materialize(current, cfg)
+      if (cfg.sync.plugins) {
+        try {
+          applyPlugins(current, pluginSpec())
+        } catch (err) {
+          log("plugins:apply-error", String(err))
+        }
+      }
       if (cfg.sync.config === "auto") {
         const cached = current
         setTimeout(() => {
@@ -174,6 +189,17 @@ export default Plugin.define({
           current = fresh
           saveSnapshot(cfg, fresh)
           materialize(fresh, cfg)
+          if (cfg.sync.plugins) {
+            try {
+              const plugins = applyPlugins(fresh, pluginSpec())
+              if (plugins.configChanged || plugins.filesWritten) {
+                log("plugins:applied", { entries: plugins.pluginCount, files: plugins.filesWritten, config: plugins.configChanged })
+                void rpc?.events.emit("updated", { kind: "plugins", summary: summary(cfg) })
+              }
+            } catch (err) {
+              log("plugins:apply-error", String(err))
+            }
+          }
           await ctx.skill.reload()
           await ctx.mcp.reload()
           const previous = loadApplied(cfg)

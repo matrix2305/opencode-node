@@ -21,6 +21,14 @@ First working release of the OpenCode node plugin.
   `.conflict-<node>-<timestamp>`.
 - Background push timer (default 5 minutes).
 
+### Plugins
+
+- Hub plugin list merged into the local config during `init` and `pull`
+  (object form/options preserved, local entries kept, JSONC-safe, idempotent).
+- `plugin/` + `plugins/` trees copied; `package.json` dependencies merged.
+- Server applies the same layer on startup/refresh and emits `plugins`.
+- `sync.plugins` toggle (default on).
+
 ### Multi-hub
 
 - Config schema v2 with `hubs` + `activeHub`; legacy config migration.

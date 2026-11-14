@@ -4,7 +4,7 @@ A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
 file-based memory from there.
 
-Status: **M6 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
+Status: **M9 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
 commands, conflict-safe push, tests, build and publish pipeline.
 
 ## How it works
@@ -73,6 +73,25 @@ oc-node restart          # opencode service restart
 The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 `node src/cli.ts <command>` (Node 23+).
 
+## Plugins
+
+`sync.plugins` (default on) pulls the plugin layer from the hub during
+`oc-node init` and every `oc-node pull`:
+
+- hub `plugins` / `plugin` entries are appended to the local `plugins` array
+  (object form and options preserved, local entries never removed, idempotent);
+- `~/.config/opencode/plugin/` and `plugins/` trees are copied;
+- `package.json` dependencies are merged (local wins on conflicts).
+
+The server plugin does the same on startup and after each refresh, then emits
+`plugins` so the TUI can prompt for a restart. OpenCode installs npm plugins into
+`~/.cache/opencode/npm` on the next start or `opencode reload`.
+
+```bash
+oc-node pull            # syncs setup, memory and plugins
+oc-node pull --config   # also replaces opencode.jsonc with the hub config
+```
+
 ## Multiple hubs
 
 ```bash
@@ -118,7 +137,8 @@ records `applied.config`, backs up every overwritten file, and logs
 | Commands | `~/.config/opencode/commands/<name>.md` + `ctx.command.reload()` |
 | MCP | `ctx.mcp.transform` from the hub config |
 | Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved, `off`/`manual`/`auto` modes |
-| Memory | `~/agents/<agent>/` pulled from the hub; injected into the system prompt; `memory_*` tools; conflict-safe push |
+| Memory | `~/agents/<agent>/` folder mirror with conflict-safe push (no memory tools; the hub memory plugin does that) |
+| Plugins | hub `plugins` list merged into the local config, `plugin/` files copied, `package.json` dependencies merged |
 
 ## TUI
 

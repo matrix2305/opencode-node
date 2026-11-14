@@ -26,6 +26,13 @@ export interface CommandEntry {
   sha: string
 }
 
+export interface PluginEntry {
+  /** package spec or local path used for de-duplication */
+  spec: string
+  /** exact entry to insert into the plugins array */
+  value: unknown
+}
+
 export interface MemoryFile {
   rel: string
   agent: string
@@ -43,6 +50,9 @@ export interface Snapshot {
   commands: CommandEntry[]
   mcp: Record<string, unknown>
   memory: MemoryFile[]
+  plugins: PluginEntry[]
+  pluginFiles: Array<{ file: string; content: string; sha: string }>
+  pluginPackage?: { content: string; sha: string }
   config?: { file: string; content: string; sha: string }
   extras: Array<{ file: string; content: string; sha: string }>
   hashes: {
@@ -51,6 +61,7 @@ export interface Snapshot {
     commands: string
     mcp: string
     memory: string
+    plugins: string
     config?: string
   }
 }

@@ -20,7 +20,7 @@ import {
 import { Hub } from "./hub.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
-import { applyConfig, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
+import { applyConfig, applyPlugins, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
 import type { Snapshot } from "./snapshot.ts"
 
 function localConfigDir(): string {
@@ -116,6 +116,7 @@ function printSummary(snapshot: Snapshot | null) {
   info(`commands: ${snapshot.commands.length}`)
   info(`mcp:      ${Object.keys(snapshot.mcp).join(", ") || "-"}`)
   info(`memory:   ${snapshot.memory?.length ?? 0} files`)
+  info(`plugins:  ${snapshot.plugins?.length ?? 0} entries, ${snapshot.pluginFiles?.length ?? 0} local file(s)`)
   info(`config:   ${snapshot.config ? snapshot.config.file : "-"}`)
 }
 
@@ -155,6 +156,12 @@ function cmdInit() {
     return pull(hub, cfg).then((snapshot) => {
       saveSnapshot(cfg, snapshot)
       materialize(snapshot, cfg)
+      let plugins
+      if (cfg.sync.plugins) {
+        plugins = applyPlugins(snapshot, pluginSpec())
+        if (plugins.configChanged) info("plugins:  hub plugin list merged into local config")
+        if (plugins.filesWritten) info(`plugins:  ${plugins.filesWritten} local plugin file(s) written`)
+      }
       let configChanged = false
       if (flag("--config")) {
         info("warning:  local opencode.jsonc will be replaced by the hub config (backup kept)")
@@ -177,6 +184,10 @@ function cmdPull() {
   return pull(hub, cfg).then((snapshot) => {
     saveSnapshot(cfg, snapshot)
     const result = materialize(snapshot, cfg)
+    let pluginResult
+    if (cfg.sync.plugins) {
+      pluginResult = applyPlugins(snapshot, pluginSpec())
+    }
     let configChanged = false
     if (flag("--config")) {
       const written = applyConfig(snapshot, cfg, pluginSpec())
@@ -187,6 +198,10 @@ function cmdPull() {
     recordApplied(snapshot, cfg, configChanged)
     printSummary(snapshot)
     info(`files:    ${result.skillFiles} skills, ${result.agentFiles} agents, ${result.commandFiles} commands`)
+    if (pluginResult) {
+      info(`plugins:  ${pluginResult.pluginCount} from hub, ${pluginResult.filesWritten} file(s) written${pluginResult.configChanged ? ", config updated" : ""}`)
+      if (pluginResult.configChanged || pluginResult.filesWritten) info("next:     restart OpenCode to install/load the synced plugins")
+    }
     if (configChanged) info("next:     restart OpenCode to apply config/providers (oc-node restart)")
     if (result.changed) info("next:     run `oc-node restart` (or `opencode reload`) to apply agents/commands")
   })

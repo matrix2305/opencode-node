@@ -5,9 +5,9 @@ import path from "node:path"
 
 import { DATA_DIR, appliedFile, ensureHubData, skillsDir, snapshotFile, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
-import { ensurePluginSpec } from "./jsonc.ts"
+import { ensurePluginEntries, ensurePluginSpec } from "./jsonc.ts"
 import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
-import type { Applied, AgentEntry, CommandEntry, MemoryFile, SkillEntry, Snapshot } from "./snapshot.ts"
+import type { Applied, AgentEntry, CommandEntry, MemoryFile, PluginEntry, SkillEntry, Snapshot } from "./snapshot.ts"
 
 const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
 const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
@@ -164,6 +164,68 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
   } catch {}
   memory.sort((a, b) => a.rel.localeCompare(b.rel))
 
+  // ---------- plugins ----------
+  const pluginEntries: PluginEntry[] = []
+  const pushPlugin = (value: unknown) => {
+    const spec =
+      typeof value === "string"
+        ? value
+        : value && typeof value === "object" && typeof (value as any).package === "string"
+          ? (value as any).package
+          : undefined
+    if (!spec) return
+    if (pluginEntries.some((p) => p.spec === spec)) return
+    pluginEntries.push({ spec, value })
+  }
+  const collectPlugins = (info: any) => {
+    for (const key of ["plugins", "plugin"]) {
+      const value = info?.[key]
+      if (Array.isArray(value)) value.forEach(pushPlugin)
+    }
+  }
+  try {
+    const config = await hub.json("/api/config", loc)
+    for (const entry of config as any[]) collectPlugins(entry?.info)
+  } catch {}
+
+  const pluginFiles: Snapshot["pluginFiles"] = []
+  for (const dir of ["plugin", "plugins"]) {
+    const walk = async (abs: string, rel: string) => {
+      let entries: Array<{ path: string; type: string }> = []
+      try {
+        entries = await hub.list(abs)
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        const clean = entry.path.replace(/\/$/, "")
+        const name = clean.split("/").pop() ?? ""
+        if (name === "node_modules" || name === ".git") continue
+        if (entry.type === "directory") {
+          await walk(`${root}/${clean}`, `${rel}${name}/`)
+        } else {
+          if (name.includes(".conflict-")) continue
+          let content: string
+          try {
+            content = await hub.read(clean)
+          } catch {
+            continue
+          }
+          if (content.length > 512 * 1024 || !isText(content)) continue
+          pluginFiles.push({ file: `${rel}${name}`, content, sha: sha256(content) })
+        }
+      }
+    }
+    await walk(`${root}/.config/opencode/${dir}`, `${dir}/`)
+  }
+  pluginFiles.sort((a, b) => a.file.localeCompare(b.file))
+
+  let pluginPackage: Snapshot["pluginPackage"]
+  try {
+    const content = await hub.read(".config/opencode/package.json")
+    if (content.length <= 256 * 1024) pluginPackage = { content, sha: sha256(content) }
+  } catch {}
+
   let configFile: Snapshot["config"]
   for (const candidate of [".config/opencode/opencode.jsonc", ".config/opencode/opencode.json"]) {
     try {
@@ -190,6 +252,9 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     commands,
     mcp,
     memory,
+    plugins: pluginEntries,
+    pluginFiles,
+    ...(pluginPackage ? { pluginPackage } : {}),
     ...(configFile ? { config: configFile } : {}),
     extras,
     hashes: {
@@ -198,6 +263,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       commands: hashList(commands),
       mcp: sha256(JSON.stringify(mcp)),
       memory: hashList(memory),
+      plugins: sha256(JSON.stringify(pluginEntries.map((p) => p.value).concat(pluginFiles.map((f) => f.sha)))),
       ...(configFile ? { config: configFile.sha } : {}),
     },
   }
@@ -275,6 +341,66 @@ export function materialize(snapshot: Snapshot, cfg: NodeConfig): MaterializeRes
     memoryKeptLocal: memory.keptLocal,
     changed,
   }
+}
+
+export interface PluginsResult {
+  configChanged: boolean
+  pluginCount: number
+  filesWritten: number
+  packageMerged: boolean
+}
+
+/**
+ * Apply only the plugin layer of a snapshot: merge the hub plugin list into the
+ * local config (never removing local entries), copy local plugin files and merge
+ * package.json dependencies.
+ */
+export function applyPlugins(snapshot: Snapshot, spec: string): PluginsResult {
+  const result: PluginsResult = { configChanged: false, pluginCount: snapshot.plugins?.length ?? 0, filesWritten: 0, packageMerged: false }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+
+  if (snapshot.plugins?.length) {
+    let target = path.join(LOCAL_CONFIG_DIR, "opencode.jsonc")
+    if (!fs.existsSync(target)) {
+      const json = path.join(LOCAL_CONFIG_DIR, "opencode.json")
+      if (fs.existsSync(json)) target = json
+    }
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(LOCAL_CONFIG_DIR, { recursive: true })
+      fs.writeFileSync(target, `{\n  "$schema": "https://opencode.ai/config.json"\n}\n`, { mode: 0o600 })
+    }
+    const current = fs.readFileSync(target, "utf8")
+    const pluginEntry = ensurePluginSpec(current, spec)
+    const merged = ensurePluginEntries(pluginEntry.text, snapshot.plugins.map((p) => p.value))
+    if (pluginEntry.changed || merged.added) {
+      backupFile(target, stamp)
+      fs.writeFileSync(target, merged.text)
+      fs.chmodSync(target, 0o600)
+      result.configChanged = true
+    }
+  }
+
+  for (const file of snapshot.pluginFiles ?? []) {
+    const dest = path.join(LOCAL_CONFIG_DIR, file.file)
+    if (writeIfChanged(dest, file.content, stamp)) result.filesWritten++
+  }
+
+  if (snapshot.pluginPackage) {
+    const dest = path.join(LOCAL_CONFIG_DIR, "package.json")
+    try {
+      const hubPkg = JSON.parse(snapshot.pluginPackage.content)
+      const localPkg = fs.existsSync(dest) ? JSON.parse(fs.readFileSync(dest, "utf8")) : {}
+      const dependencies = { ...(hubPkg.dependencies ?? {}), ...(localPkg.dependencies ?? {}) }
+      const merged = { ...hubPkg, ...localPkg, dependencies }
+      const text = JSON.stringify(merged, null, 2) + "\n"
+      if (writeIfChanged(dest, text, stamp)) {
+        result.packageMerged = true
+        result.filesWritten++
+      }
+    } catch {}
+  }
+
+  return result
 }
 
 export interface ConfigResult {
