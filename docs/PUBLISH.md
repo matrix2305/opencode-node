@@ -49,5 +49,7 @@ oc-node init --hub https://matrix2305.tailbd26da.ts.net \
   --password-ref keychain:opencode-matrix2305
 ```
 
+Repository: https://github.com/matrix2305/opencode-node (public, tag `v0.1.0`).
+
 The CLI records the installed package directory in the local OpenCode config, so
 upgrades keep the same plugin path.

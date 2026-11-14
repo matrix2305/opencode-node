@@ -1,5 +1,7 @@
 # opencode-node
 
+[![npm](https://img.shields.io/npm/v/@matrix2305/opencode-node)](https://www.npmjs.com/package/@matrix2305/opencode-node)
+
 A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
 file-based memory from there.
