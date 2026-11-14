@@ -21,6 +21,12 @@ First working release of the OpenCode node plugin.
   `.conflict-<node>-<timestamp>`.
 - Background push timer (default 5 minutes).
 
+### Config modes
+
+- `sync.config`: `off`, `manual`, `auto`.
+- `oc-node config --mode auto|manual|off`, `--dry-run`.
+- Auto apply on setup/refresh with backups, applied hash and RPC `config` event.
+
 ### CLI
 
 - `oc-node init|pull|push|status|doctor|config|restore|restart`.

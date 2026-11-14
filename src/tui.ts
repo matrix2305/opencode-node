@@ -43,6 +43,7 @@ export default Plugin.define({
     const unsubscribe = rpc.events.on("updated", (event: any) => {
       const data = event?.data ?? {}
       if (data.kind === "sync") toast("setup synced from hub", "success")
+      if (data.kind === "config") toast("config updated · restart OpenCode", "warning")
       if (data.kind === "push") {
         const summary: any = data.summary ?? {}
         const pending: string[] = summary?.memory?.pending ?? []

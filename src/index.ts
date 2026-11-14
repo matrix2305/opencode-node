@@ -2,12 +2,13 @@ import { Plugin } from "@opencode/plugin"
 import fs from "node:fs"
 import path from "node:path"
 
-import { DATA_DIR, LOG_FILE, defaultConfig, loadConfig, resolvePassword, type NodeConfig } from "./config.ts"
+import { DATA_DIR, LOG_FILE, configMode, defaultConfig, loadConfig, pluginSpec, resolvePassword, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { NodeRpc } from "./rpc.ts"
 import { buildMemoryBlock, memoryRoot, pendingMemory, pushMemory, searchMemory, storeMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
 import {
+  applyConfig,
   loadApplied,
   loadSnapshot,
   materialize,
@@ -64,10 +65,29 @@ function summary(cfg: NodeConfig) {
       ? { skills: current.skills.length, agents: current.agents.length, commands: current.commands.length, mcp: Object.keys(current.mcp).length }
       : null,
     applied,
+    configMode: configMode(cfg),
     memory: current ? { files: current.memory?.length ?? 0, pending: pendingMemory(cfg, current) } : null,
     hashes: current?.hashes ?? null,
     configDrift: Boolean(current?.config && loadApplied()?.config !== current.hashes.config),
   }
+}
+
+function maybeApplyConfig(cfg: NodeConfig, snapshot: Snapshot): boolean {
+  if (cfg.sync.config !== "auto" || !snapshot.config) return false
+  const previous = loadApplied()
+  if (previous?.config === snapshot.hashes.config) return false
+  const result = applyConfig(snapshot, pluginSpec())
+  saveApplied({
+    skills: snapshot.hashes.skills,
+    agents: snapshot.hashes.agents,
+    commands: snapshot.hashes.commands,
+    mcp: snapshot.hashes.mcp,
+    ...(previous?.config ? { config: previous.config } : {}),
+    config: snapshot.hashes.config,
+  })
+  log("config:auto-applied", { files: result.wrote, removed: result.removed, restartRequired: true })
+  void rpc?.events.emit("updated", { kind: "config", summary: summary(cfg) })
+  return result.changed
 }
 
 export default Plugin.define({
@@ -124,6 +144,16 @@ export default Plugin.define({
     let applied = false
     if (current) {
       materialize(current, cfg)
+      if (cfg.sync.config === "auto") {
+        const cached = current
+        setTimeout(() => {
+          try {
+            maybeApplyConfig(cfg, cached)
+          } catch (err) {
+            log("config:auto-error", String(err))
+          }
+        }, 1500).unref?.()
+      }
       await ctx.skill.reload()
       await ctx.mcp.reload()
       const previous = loadApplied()
@@ -166,6 +196,11 @@ export default Plugin.define({
             ...(previous?.config ? { config: previous.config } : {}),
           })
           log("refresh:ok", { changed, counts: { skills: fresh.skills.length, agents: fresh.agents.length, commands: fresh.commands.length, mcp: Object.keys(fresh.mcp).length } })
+          try {
+            maybeApplyConfig(cfg, fresh)
+          } catch (err) {
+            log("config:auto-error", String(err))
+          }
           void rpc?.events.emit("updated", { kind: "sync", summary: summary(cfg) })
           if (changed && fresh.config) log("config:drift", "hub config changed; run: oc-node pull --config")
         } catch (err) {

@@ -73,6 +73,28 @@ oc-node restart          # opencode service restart
 The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 `node src/cli.ts <command>` (Node 23+).
 
+## Config/providers modes
+
+`sync.config` controls the raw hub `opencode.jsonc` (providers, models, plugins,
+MCP):
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | never touch the local config |
+| `manual` | only `oc-node config` / `oc-node pull --config` |
+| `auto` | write the hub config when its hash changes |
+
+```bash
+oc-node config --mode auto      # set + apply now
+oc-node config --mode manual
+oc-node config --dry-run
+```
+
+Auto apply keeps the node plugin entry, removes the legacy `opencode.json`,
+records `applied.config`, backs up every overwritten file, and logs
+`config:auto-applied`. Restart OpenCode for a guaranteed clean load.
+`auth.json` (provider credentials stored outside config) is not synced.
+
 ## What is synced
 
 | Category | Mechanism |
@@ -81,7 +103,7 @@ The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 | Agents | `~/.config/opencode/agents/<id>.md` + `ctx.agent.reload()` |
 | Commands | `~/.config/opencode/commands/<name>.md` + `ctx.command.reload()` |
 | MCP | `ctx.mcp.transform` from the hub config |
-| Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved |
+| Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved, `off`/`manual`/`auto` modes |
 | Memory | `~/agents/<agent>/` pulled from the hub; injected into the system prompt; `memory_*` tools; conflict-safe push |
 
 ## TUI

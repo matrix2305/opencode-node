@@ -8,6 +8,7 @@ import {
   CONFIG_DIR,
   CONFIG_FILE,
   DATA_DIR,
+  configMode,
   defaultConfig,
   loadConfig,
   pluginSpec,
@@ -205,6 +206,7 @@ function cmdStatus() {
   info(`config:   ${CONFIG_FILE}`)
   info(`hub:      ${cfg.hub.url}`)
   info(`password: ${cfg.hub.passwordRef ?? "unset"}`)
+  info(`config:   mode=${configMode(cfg)} (oc-node config --mode auto|manual|off)`)
   info(`plugin:   ${pluginEntryPresent(pluginSpec()) ? "installed" : "missing in local config"}`)
   const snapshot = loadSnapshot()
   if (!snapshot) {
@@ -231,6 +233,7 @@ function cmdDoctor() {
   checks.push(["password", password ? `ok (${password.length} chars)` : "missing"])
   checks.push(["plugin entry", pluginEntryPresent(pluginSpec()) ? "ok" : "missing"])
   checks.push(["cache dir", fs.existsSync(DATA_DIR) ? "ok" : "will be created"])
+  checks.push(["config mode", configMode(cfg)])
   const hub = new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
   return hub
     .info()
@@ -286,8 +289,22 @@ function cmdRestart() {
 function cmdConfig() {
   const cfg = loadConfig()
   if (!cfg) fail("not initialised")
+  const mode = arg("--mode")
+  if (mode) {
+    if (!["auto", "manual", "off"].includes(mode)) fail("--mode must be auto, manual or off")
+    cfg.sync.config = mode === "off" ? false : (mode as "auto" | "manual")
+    saveConfig(cfg)
+    info(`config mode: ${mode}`)
+    if (mode !== "auto") return
+  }
   const snapshot = loadSnapshot()
   if (!snapshot) fail("no snapshot (run: oc-node pull)")
+  if (flag("--dry-run")) {
+    info(`would write: ${path.join(localConfigDir(), "opencode.jsonc")}`)
+    info(`hub sha: ${snapshot.hashes.config ?? "-"}`)
+    return
+  }
+  if (mode === "auto" && flag("--no-apply")) return
   const result = applyConfig(snapshot, pluginSpec())
   if (result.changed) {
     const applied = loadApplied() ?? { skills: "", agents: "", commands: "", mcp: "" }
@@ -321,7 +338,7 @@ function main() {
       info("usage: oc-node <init|pull|push|status|doctor|config|restore|restart>")
       info("  init --hub <url> --password-ref keychain:<service> [--config] [--restart]")
       info("  pull [--config] | push")
-      info("  status | doctor | config | restore [--from <stamp>] | restart")
+      info("  status | doctor | config [--mode auto|manual|off] [--dry-run] | restore [--from <stamp>] | restart")
       process.exit(command ? 1 : 0)
   }
 }

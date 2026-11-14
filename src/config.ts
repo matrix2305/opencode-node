@@ -18,7 +18,7 @@ export interface NodeConfig {
     agents: boolean
     commands: boolean
     mcp: boolean
-    config: boolean
+    config: boolean | "manual" | "auto"
     memory: boolean
   }
   paths: {
@@ -59,21 +59,31 @@ export function defaultConfig(hub: string, passwordRef?: string): NodeConfig {
   }
 }
 
+export function normalizeConfig(raw: any): NodeConfig {
+  const base = defaultConfig(raw?.hub?.url ?? "")
+  const merged: NodeConfig = {
+    ...base,
+    ...raw,
+    hub: { ...base.hub, ...raw?.hub },
+    sync: { ...base.sync, ...raw?.sync },
+    paths: { ...base.paths, ...raw?.paths },
+    memory: { ...base.memory, ...raw?.memory },
+  }
+  const mode = merged.sync.config as unknown
+  merged.sync.config = mode === "auto" || mode === "manual" ? mode : mode === false || mode === "off" ? false : "manual"
+  return merged
+}
+
 export function loadConfig(): NodeConfig | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"))
-    const base = defaultConfig(raw.hub?.url ?? "")
-    return {
-      ...base,
-      ...raw,
-      hub: { ...base.hub, ...raw.hub },
-      sync: { ...base.sync, ...raw.sync },
-      paths: { ...base.paths, ...raw.paths },
-      memory: { ...base.memory, ...raw.memory },
-    }
+    return normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")))
   } catch {
     return null
   }
+}
+
+export function configMode(cfg: NodeConfig): "auto" | "manual" | "off" {
+  return cfg.sync.config === "auto" ? "auto" : cfg.sync.config === "manual" ? "manual" : "off"
 }
 
 export function saveConfig(cfg: NodeConfig) {
