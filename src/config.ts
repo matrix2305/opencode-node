@@ -25,6 +25,13 @@ export interface NodeConfig {
     remoteRoot: string
     agentsRoot: string
   }
+  memory: {
+    enabled: boolean
+    localRoot: string
+    maxInjectBytes: number
+    push: boolean
+    pushIntervalSeconds: number
+  }
   cacheSeconds: number
 }
 
@@ -41,6 +48,13 @@ export function defaultConfig(hub: string, passwordRef?: string): NodeConfig {
     node: { id: os.hostname() },
     sync: { skills: true, agents: true, commands: true, mcp: true, config: true, memory: false },
     paths: { remoteRoot: "/home/matrix2305", agentsRoot: "agents" },
+    memory: {
+      enabled: true,
+      localRoot: path.join(os.homedir(), "agents"),
+      maxInjectBytes: 16000,
+      push: true,
+      pushIntervalSeconds: 300,
+    },
     cacheSeconds: 300,
   }
 }
@@ -48,7 +62,15 @@ export function defaultConfig(hub: string, passwordRef?: string): NodeConfig {
 export function loadConfig(): NodeConfig | null {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"))
-    return { ...defaultConfig(raw.hub?.url ?? ""), ...raw, hub: { ...raw.hub }, sync: { ...defaultConfig("").sync, ...raw.sync }, paths: { ...defaultConfig("").paths, ...raw.paths } }
+    const base = defaultConfig(raw.hub?.url ?? "")
+    return {
+      ...base,
+      ...raw,
+      hub: { ...base.hub, ...raw.hub },
+      sync: { ...base.sync, ...raw.sync },
+      paths: { ...base.paths, ...raw.paths },
+      memory: { ...base.memory, ...raw.memory },
+    }
   } catch {
     return null
   }

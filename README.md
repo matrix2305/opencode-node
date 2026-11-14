@@ -4,8 +4,8 @@ A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
 eventually memory from there.
 
-Status: **M1** — config file, CLI, cache-first startup, and full setup pull
-(agents, skills, commands, MCP, `opencode.jsonc`). Memory is not wired yet.
+Status: **M2** — config, CLI, cache-first startup, full setup pull and file-based
+memory (pull, injection, tools, conflict-safe push).
 
 ## How it works
 
@@ -55,6 +55,7 @@ node src/cli.ts init \
 oc-node status           # hub, cache age, counts, applied state, config drift
 oc-node doctor           # config, password, plugin entry, hub reachability
 oc-node pull             # refresh snapshot + materialise files
+oc-node push             # push locally changed memory back (conflict-safe)
 oc-node pull --config    # also replace local opencode.jsonc with the hub config
 oc-node config           # apply the config from the current snapshot
 oc-node restart          # opencode service restart
@@ -72,7 +73,21 @@ oc-node restart          # opencode service restart
 | Commands | `~/.config/opencode/commands/<name>.md` + `ctx.command.reload()` |
 | MCP | `ctx.mcp.transform` from the hub config |
 | Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved |
-| Memory | **not yet** (M3) |
+| Memory | `~/agents/<agent>/` pulled from the hub; injected into the system prompt; `memory_*` tools; conflict-safe push |
+
+## Memory
+
+- Hub workspace `~/agents/<agent>/` is mirrored to `~/agents/<agent>/` on the
+  node (paths rewritten between `/home/matrix2305/agents` and the local root).
+- A locally modified file is never overwritten by a pull; it stays until pushed.
+- Push is three-way: hub sha vs local hash vs last synced `localSha`. If both
+  sides changed, a `.conflict-<node>-<timestamp>` copy is written and the hub is
+  left untouched.
+- Injection: the `context` (and `compaction`) hook adds a
+  `<opencode-node-memory agent="...">` block for the session's agent, capped at
+  `memory.maxInjectBytes` (16 KB by default).
+- Tools: `memory_search`, `memory_get`, `memory_store`, `memory_push`.
+- A background timer pushes pending changes every `pushIntervalSeconds` (300s).
 
 ## Runtime constraints found in 2.3.0
 
@@ -82,6 +97,8 @@ oc-node restart          # opencode service restart
   drops the skill).
 - `Command.Info` has no template; command files are copied instead.
 - `/api/config` contains provider keys; never log it.
+- `/api/fs/*` resolves relative paths against `location[directory]`; the client
+  always sends the configured remote root.
 - MCP transforms apply immediately, but `ctx.mcp.list()` is empty until the
   server connects.
 

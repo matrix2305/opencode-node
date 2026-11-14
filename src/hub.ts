@@ -15,10 +15,12 @@ export class HubError extends Error {
 
 export class Hub {
   private readonly base: string
+  private readonly root?: string
   private readonly headers: Record<string, string>
 
-  constructor(url: string, password: string) {
+  constructor(url: string, password: string, root?: string) {
     this.base = url.replace(/\/$/, "")
+    this.root = root
     this.headers = {
       Authorization: "Basic " + Buffer.from(`opencode:${password}`).toString("base64"),
     }
@@ -59,15 +61,28 @@ export class Hub {
   }
 
   list(absPath: string): Promise<Array<{ path: string; type: "file" | "directory" }>> {
-    return this.json("/api/fs/list", { path: absPath }).then((d) => d.data ?? [])
+    return this.json("/api/fs/list", { path: absPath, ...(this.root ? { "location[directory]": this.root } : {}) }).then((d) => d.data ?? [])
   }
 
   read(rel: string): Promise<string> {
-    return this.text("/api/fs/read/" + rel.split("/").map(encodeURIComponent).join("/"))
+    const url = this.url("/api/fs/read/" + rel.split("/").map(encodeURIComponent).join("/"), this.root ? { "location[directory]": this.root } : undefined)
+    return this.textUrl(url)
+  }
+
+  async textUrl(url: URL, timeoutMs = 15000): Promise<string> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(url, { headers: this.headers, signal: controller.signal })
+      if (!res.ok) throw new HubError(`${url.pathname} -> ${res.status}`, res.status)
+      return await res.text()
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async write(absPath: string, content: string): Promise<void> {
-    const url = this.url("/api/experimental/fs/write", { path: absPath })
+    const url = this.url("/api/experimental/fs/write", { path: absPath, ...(this.root ? { "location[directory]": this.root } : {}) })
     const res = await fetch(url, {
       method: "POST",
       headers: { ...this.headers, "Content-Type": "application/octet-stream" },

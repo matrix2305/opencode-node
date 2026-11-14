@@ -6,7 +6,8 @@ import path from "node:path"
 import { DATA_DIR, SNAPSHOT_FILE, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
-import type { Applied, AgentEntry, CommandEntry, SkillEntry, Snapshot } from "./snapshot.ts"
+import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
+import type { Applied, AgentEntry, CommandEntry, MemoryFile, SkillEntry, Snapshot } from "./snapshot.ts"
 
 const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
 const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
@@ -115,6 +116,50 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     mcp = doc?.info?.mcp?.servers ?? {}
   } catch {}
 
+  const memory: MemoryFile[] = []
+  const walkMemory = async (abs: string, prefix: string) => {
+    let entries: Array<{ path: string; type: string }> = []
+    try {
+      entries = await hub.list(abs)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const clean = entry.path.replace(/\/$/, "")
+      const name = clean.split("/").pop() ?? ""
+      if (entry.type === "directory") {
+        if ([".git", "node_modules", "skills", ".clawhub", ".dreams"].includes(name)) continue
+        await walkMemory(`${root}/${clean}`, `${prefix}${name}/`)
+      } else {
+        if (name.includes(".conflict-")) continue
+        let content: string
+        try {
+          content = await hub.read(entry.path)
+        } catch {
+          continue
+        }
+        if (content.length > 1024 * 1024 || !isText(content)) continue
+        memory.push({
+          rel: `${prefix}${name}`,
+          agent: prefix.split("/")[0] ?? "",
+          content,
+          sha: memorySha(content),
+          localSha: memorySha(rewriteForNode(content, cfg)),
+        })
+      }
+    }
+  }
+  try {
+    for (const entry of await hub.list(`${root}/agents`)) {
+      if (entry.type !== "directory") continue
+      const clean = entry.path.replace(/\/$/, "")
+      const name = clean.split("/").pop() ?? ""
+      if ([".git", "skills", ".clawhub", ".dreams"].includes(name)) continue
+      await walkMemory(`${root}/${clean}`, `${name}/`)
+    }
+  } catch {}
+  memory.sort((a, b) => a.rel.localeCompare(b.rel))
+
   let configFile: Snapshot["config"]
   for (const candidate of [".config/opencode/opencode.jsonc", ".config/opencode/opencode.json"]) {
     try {
@@ -140,6 +185,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     agents,
     commands,
     mcp,
+    memory,
     ...(configFile ? { config: configFile } : {}),
     extras,
     hashes: {
@@ -147,6 +193,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       agents: hashList(agents),
       commands: hashList(commands),
       mcp: sha256(JSON.stringify(mcp)),
+      memory: hashList(memory),
       ...(configFile ? { config: configFile.sha } : {}),
     },
   }
@@ -186,11 +233,14 @@ export interface MaterializeResult {
   skillFiles: number
   agentFiles: number
   commandFiles: number
+  memoryFiles: number
+  memoryWritten: number
+  memoryKeptLocal: number
   changed: boolean
 }
 
 /** Write snapshot content to local files. Safe to call on every start. */
-export function materialize(snapshot: Snapshot): MaterializeResult {
+export function materialize(snapshot: Snapshot, cfg: NodeConfig): MaterializeResult {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")
   let changed = false
 
@@ -209,10 +259,16 @@ export function materialize(snapshot: Snapshot): MaterializeResult {
     if (writeIfChanged(file, command.content, stamp)) changed = true
   }
 
+  const memory = materializeMemory(snapshot, cfg)
+  if (memory.written > 0) changed = true
+
   return {
     skillFiles: snapshot.skills.length,
     agentFiles: snapshot.agents.length,
     commandFiles: snapshot.commands.length,
+    memoryFiles: snapshot.memory?.length ?? 0,
+    memoryWritten: memory.written,
+    memoryKeptLocal: memory.keptLocal,
     changed,
   }
 }

@@ -16,6 +16,7 @@ import {
   type NodeConfig,
 } from "./config.ts"
 import { Hub } from "./hub.ts"
+import { pendingMemory, pushMemory } from "./memory.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
 import { applyConfig, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
 
@@ -46,7 +47,7 @@ function info(message: string) {
 function ensureConfig(cfg: NodeConfig): Hub {
   const password = resolvePassword(cfg.hub.passwordRef)
   if (!password) fail(`no password for ${cfg.hub.url} (passwordRef: ${cfg.hub.passwordRef ?? "unset"})`)
-  return new Hub(cfg.hub.url, password)
+  return new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
 }
 
 function backup(file: string) {
@@ -111,6 +112,7 @@ function printSummary(snapshot: ReturnType<typeof loadSnapshot>) {
   info(`agents:   ${snapshot.agents.length}`)
   info(`commands: ${snapshot.commands.length}`)
   info(`mcp:      ${Object.keys(snapshot.mcp).join(", ") || "-"}`)
+  info(`memory:   ${snapshot.memory?.length ?? 0} files`)
   info(`config:   ${snapshot.config ? snapshot.config.file : "-"}`)
 }
 
@@ -141,7 +143,7 @@ function cmdInit() {
     info(`hub:      ${hubInfo.hostname ?? "?"} · OpenCode ${hubInfo.version}`)
     return pull(hub, cfg).then((snapshot) => {
       saveSnapshot(snapshot)
-      materialize(snapshot)
+      materialize(snapshot, cfg)
       let configChanged = false
       if (flag("--config")) {
         info("warning:  local opencode.jsonc will be replaced by the hub config (backup kept)")
@@ -163,7 +165,7 @@ function cmdPull() {
   const hub = ensureConfig(cfg)
   return pull(hub, cfg).then((snapshot) => {
     saveSnapshot(snapshot)
-    const result = materialize(snapshot)
+    const result = materialize(snapshot, cfg)
     let configChanged = false
     if (flag("--config")) {
       const written = applyConfig(snapshot, pluginSpec())
@@ -176,6 +178,21 @@ function cmdPull() {
     info(`files:    ${result.skillFiles} skills, ${result.agentFiles} agents, ${result.commandFiles} commands`)
     if (configChanged) info("next:     restart OpenCode to apply config/providers (oc-node restart)")
     if (result.changed) info("next:     run `oc-node restart` (or `opencode reload`) to apply agents/commands")
+  })
+}
+
+function cmdPush() {
+  const cfg = loadConfig()
+  if (!cfg) fail("not initialised")
+  const snapshot = loadSnapshot()
+  if (!snapshot) fail("no snapshot (run: oc-node pull)")
+  const hub = ensureConfig(cfg)
+  return pushMemory(hub, cfg, snapshot).then((result) => {
+    saveSnapshot(snapshot)
+    info(`uploaded: ${result.uploaded.join(", ") || "-"}`)
+    info(`conflicts: ${result.conflicts.join(", ") || "-"}`)
+    info(`unchanged: ${result.unchanged}`)
+    if (result.conflicts.length) info("conflict copies were written next to the local files")
   })
 }
 
@@ -196,6 +213,8 @@ function cmdStatus() {
   }
   info(`cached:   ${new Date(snapshot.fetchedAt).toISOString()} (${Math.round((Date.now() - snapshot.fetchedAt) / 1000)}s ago)`)
   printSummary(snapshot)
+  const pending = pendingMemory(cfg, snapshot)
+  info(`pending:  ${pending.length ? pending.join(", ") : "-"}`)
   const applied = loadApplied()
   if (applied) {
     info(`applied:  skills=${applied.skills === snapshot.hashes.skills} agents=${applied.agents === snapshot.hashes.agents} commands=${applied.commands === snapshot.hashes.commands} mcp=${applied.mcp === snapshot.hashes.mcp}`)
@@ -212,7 +231,7 @@ function cmdDoctor() {
   checks.push(["password", password ? `ok (${password.length} chars)` : "missing"])
   checks.push(["plugin entry", pluginEntryPresent(pluginSpec()) ? "ok" : "missing"])
   checks.push(["cache dir", fs.existsSync(DATA_DIR) ? "ok" : "will be created"])
-  const hub = new Hub(cfg.hub.url, password)
+  const hub = new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
   return hub
     .info()
     .then(async (hubInfo) => {
@@ -286,6 +305,8 @@ function main() {
       return cmdInit()
     case "pull":
       return cmdPull()
+    case "push":
+      return cmdPush()
     case "status":
       return cmdStatus()
     case "doctor":
@@ -297,9 +318,9 @@ function main() {
     case "restart":
       return cmdRestart()
     default:
-      info("usage: oc-node <init|pull|status|doctor|config|restore|restart>")
+      info("usage: oc-node <init|pull|push|status|doctor|config|restore|restart>")
       info("  init --hub <url> --password-ref keychain:<service> [--config] [--restart]")
-      info("  pull [--config]")
+      info("  pull [--config] | push")
       info("  status | doctor | config | restore [--from <stamp>] | restart")
       process.exit(command ? 1 : 0)
   }

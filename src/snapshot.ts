@@ -26,6 +26,14 @@ export interface CommandEntry {
   sha: string
 }
 
+export interface MemoryFile {
+  rel: string
+  agent: string
+  content: string
+  sha: string
+  localSha: string
+}
+
 export interface Snapshot {
   version: 1
   hub: string
@@ -34,6 +42,7 @@ export interface Snapshot {
   agents: AgentEntry[]
   commands: CommandEntry[]
   mcp: Record<string, unknown>
+  memory: MemoryFile[]
   config?: { file: string; content: string; sha: string }
   extras: Array<{ file: string; content: string; sha: string }>
   hashes: {
@@ -41,6 +50,7 @@ export interface Snapshot {
     agents: string
     commands: string
     mcp: string
+    memory: string
     config?: string
   }
 }
@@ -50,5 +60,6 @@ export interface Applied {
   agents: string
   commands: string
   mcp: string
+  memory?: string
   config?: string
 }

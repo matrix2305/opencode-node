@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { DATA_DIR, LOG_FILE, defaultConfig, loadConfig, resolvePassword, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
+import { buildMemoryBlock, memoryRoot, pendingMemory, pushMemory, searchMemory, storeMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
 import {
   loadApplied,
@@ -51,7 +52,7 @@ function mcpConfig(def: any): any | null {
   return null
 }
 
-function summary() {
+function summary(cfg: NodeConfig) {
   const applied = loadApplied()
   return {
     hub: current?.hub ?? null,
@@ -61,6 +62,7 @@ function summary() {
       ? { skills: current.skills.length, agents: current.agents.length, commands: current.commands.length, mcp: Object.keys(current.mcp).length }
       : null,
     applied,
+    memory: current ? { files: current.memory?.length ?? 0, pending: pendingMemory(cfg, current) } : null,
     hashes: current?.hashes ?? null,
     configDrift: Boolean(current?.config && loadApplied()?.config !== current.hashes.config),
   }
@@ -76,7 +78,7 @@ export default Plugin.define({
       log("setup:no-password", cfg.hub.url)
       return
     }
-    const hub = new Hub(cfg.hub.url, password)
+    const hub = new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
     log("setup:start", { location: ctx.location?.directory, hub: cfg.hub.url, cached: Boolean(current) })
 
     // Register transforms once; their callbacks always read the latest snapshot.
@@ -96,6 +98,18 @@ export default Plugin.define({
       }
     })
 
+    await ctx.session.hook("context", (event: any) => {
+      if (!current) return
+      const block = buildMemoryBlock(String(event.agent ?? ""), ctx.location.directory, cfg, current)
+      if (block && Array.isArray(event.system)) event.system.push({ type: "text", text: block })
+    })
+
+    await ctx.session.hook("compaction", (event: any) => {
+      if (!current) return
+      const block = buildMemoryBlock(String(event.agent ?? ""), ctx.location.directory, cfg, current)
+      if (block && Array.isArray(event.system)) event.system.push({ type: "text", text: block })
+    })
+
     await ctx.mcp.transform((editor) => {
       const snap = current
       if (!snap) return
@@ -107,7 +121,7 @@ export default Plugin.define({
 
     let applied = false
     if (current) {
-      materialize(current)
+      materialize(current, cfg)
       await ctx.skill.reload()
       await ctx.mcp.reload()
       const previous = loadApplied()
@@ -136,7 +150,7 @@ export default Plugin.define({
           const changed = !current || JSON.stringify(fresh.hashes) !== JSON.stringify(current.hashes)
           current = fresh
           saveSnapshot(fresh)
-          materialize(fresh)
+          materialize(fresh, cfg)
           await ctx.skill.reload()
           await ctx.mcp.reload()
           const previous = loadApplied()
@@ -166,7 +180,7 @@ export default Plugin.define({
         name: "status",
         description: "Show the state of the connected OpenCode hub and the local cache",
         input: { type: "object", properties: {}, additionalProperties: false },
-        execute: async () => ({ content: JSON.stringify(summary(), null, 2) }),
+        execute: async () => ({ content: JSON.stringify(summary(cfg), null, 2) }),
       })
       editor.add({
         name: "sync",
@@ -174,12 +188,84 @@ export default Plugin.define({
         input: { type: "object", properties: {}, additionalProperties: false },
         execute: async () => {
           await refresh(true)
-          return { content: JSON.stringify(summary(), null, 2) }
+          return { content: JSON.stringify(summary(cfg), null, 2) }
+        },
+      })
+      editor.add({
+        name: "memory_search",
+        description: "Search local memory files synced from the hub",
+        input: {
+          type: "object",
+          properties: { query: { type: "string" }, agent: { type: "string" }, limit: { type: "number" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+        execute: async (input: any) => ({
+          content: JSON.stringify(searchMemory(cfg, input.query, input.agent, input.limit ?? 20), null, 2),
+        }),
+      })
+      editor.add({
+        name: "memory_get",
+        description: "Read a memory file by its path relative to the agents root",
+        input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+        execute: async (input: any) => {
+          try {
+            const fsmod = await import("node:fs")
+            const file = path.join(memoryRoot(cfg), input.path)
+            return { content: fsmod.readFileSync(file, "utf8") }
+          } catch (err) {
+            return { content: `error: ${String(err)}` }
+          }
+        },
+      })
+      editor.add({
+        name: "memory_store",
+        description: "Append a note to an agent's memory file (MEMORY.md by default)",
+        input: {
+          type: "object",
+          properties: { text: { type: "string" }, agent: { type: "string" }, file: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
+        execute: async (input: any, context: any) => {
+          const agent = input.agent ?? String(context?.agent ?? "")
+          if (!agent) return { content: "error: no agent; pass agent explicitly" }
+          const rel = storeMemory(cfg, input.text, agent, input.file ?? "MEMORY.md")
+          return { content: `stored in ${rel}` }
+        },
+      })
+      editor.add({
+        name: "memory_push",
+        description: "Push locally changed memory files back to the hub (conflict-safe)",
+        input: { type: "object", properties: {}, additionalProperties: false },
+        execute: async () => {
+          if (!current) return { content: "no snapshot" }
+          const result = await pushMemory(hub, cfg, current)
+          saveSnapshot(current)
+          return { content: JSON.stringify(result, null, 2) }
         },
       })
     })
 
+    let timer: ReturnType<typeof setInterval> | undefined
+    if (cfg.memory.enabled && cfg.memory.push) {
+      timer = setInterval(() => {
+        if (!current) return
+        void pushMemory(hub, cfg, current)
+          .then((result) => {
+            saveSnapshot(current!)
+            if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
+          })
+          .catch((err) => log("memory:push-error", String(err)))
+      }, Math.max(60, cfg.memory.pushIntervalSeconds) * 1000)
+      timer.unref?.()
+    }
+
     if (!applied) await refresh(true)
     else void refresh()
+
+    return () => {
+      if (timer) clearInterval(timer)
+    }
   },
 })
