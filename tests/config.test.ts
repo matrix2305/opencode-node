@@ -8,12 +8,14 @@ test("legacy boolean config mode maps to manual/off", () => {
   assert.equal(normalizeConfig({ hub: { url: "https://h" }, sync: { config: false } }).sync.config, false)
 })
 
-test("legacy config is migrated into a named hub", () => {
+test("legacy config is migrated into a named hub with v3 dirs", () => {
   const cfg = normalizeConfig({ hub: { url: "https://matrix2305.tailbd26da.ts.net" } })
-  assert.equal(cfg.version, 2)
+  assert.equal(cfg.version, 3)
   assert.equal(cfg.activeHub, "matrix2305")
   assert.equal(cfg.hubs.matrix2305.url, "https://matrix2305.tailbd26da.ts.net")
-  assert.equal(cfg.hub, cfg.hubs.matrix2305)
+  assert.ok(cfg.dirs.length >= 2)
+  assert.ok(cfg.dirs.some((d) => d.types.includes("setup")))
+  assert.ok(cfg.dirs.some((d) => d.types.includes("memory")))
 })
 
 test("multi-hub picks the active hub and isolates its data dir", () => {
@@ -25,6 +27,18 @@ test("multi-hub picks the active hub and isolates its data dir", () => {
   assert.equal(cfg.hub.url, "https://work.example")
   const other = normalizeConfig({ ...cfg, activeHub: "home" })
   assert.notEqual(hubDataDir(cfg), hubDataDir(other))
+})
+
+test("v2 paths/memory migrate into v3 dirs", () => {
+  const cfg = normalizeConfig({
+    hub: { url: "https://h.example" },
+    paths: { remoteRoot: "/home/hub", agentsRoot: "agents" },
+    memory: { localRoot: "/custom/agents", extraDirs: [{ remote: ".extra", local: "~/.extra" }] },
+  })
+  const mem = cfg.dirs.find((d) => d.types.includes("memory"))
+  assert.ok(mem)
+  assert.equal(mem.remote, "agents")
+  assert.equal(mem.local, "/custom/agents")
 })
 
 test("auto and manual are preserved", () => {

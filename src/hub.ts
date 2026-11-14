@@ -15,12 +15,10 @@ export class HubError extends Error {
 
 export class Hub {
   private readonly base: string
-  private readonly root?: string
   private readonly headers: Record<string, string>
 
-  constructor(url: string, password: string, root?: string) {
+  constructor(url: string, password: string) {
     this.base = url.replace(/\/$/, "")
-    this.root = root
     this.headers = {
       Authorization: "Basic " + Buffer.from(`opencode:${password}`).toString("base64"),
     }
@@ -61,11 +59,11 @@ export class Hub {
   }
 
   list(absPath: string): Promise<Array<{ path: string; type: "file" | "directory" }>> {
-    return this.json("/api/fs/list", { path: absPath, ...(this.root ? { "location[directory]": this.root } : {}) }).then((d) => d.data ?? [])
+    return this.json("/api/fs/list", { path: absPath }).then((d) => d.data ?? [])
   }
 
   read(rel: string): Promise<string> {
-    const url = this.url("/api/fs/read/" + rel.split("/").map(encodeURIComponent).join("/"), this.root ? { "location[directory]": this.root } : undefined)
+    const url = this.url("/api/fs/read/" + rel.split("/").map(encodeURIComponent).join("/"), undefined)
     return this.textUrl(url)
   }
 
@@ -82,7 +80,7 @@ export class Hub {
   }
 
   async write(absPath: string, content: string): Promise<void> {
-    const url = this.url("/api/experimental/fs/write", { path: absPath, ...(this.root ? { "location[directory]": this.root } : {}) })
+    const url = this.url("/api/experimental/fs/write", { path: absPath })
     const res = await fetch(url, {
       method: "POST",
       headers: { ...this.headers, "Content-Type": "application/octet-stream" },

@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { DATA_DIR, appliedFile, ensureHubData, skillsDir, snapshotFile, type NodeConfig } from "./config.ts"
+import { DATA_DIR, appliedFile, dirsOf, dirOf, ensureHubData, expandLocal, skillsDir, snapshotFile, type NodeConfig, type SyncDir } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { ensurePluginEntries, ensurePluginSpec } from "./jsonc.ts"
 import { fetchAuth } from "./auth.ts"
@@ -75,10 +75,10 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     throw new Error(`hub runs OpenCode ${info.version}; only 2.x is supported`)
   }
 
-  const root = cfg.paths.remoteRoot.replace(/\/$/, "")
+  const root = "~"  // hub resolves relative paths from its own home
 
   const loc = { "location[directory]": root }
-  const skillsRaw = await hub.json("/api/skill", loc)
+  const skillsRaw = await hub.json("/api/skill")
   const skills: SkillEntry[] = (skillsRaw.data ?? [])
     .filter((s: any) => {
       if (BUILTIN_SKILLS.has(s.id)) return false
@@ -95,7 +95,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       sha: sha256(s.id + "\0" + s.content),
     }))
 
-  const agentsRaw = await hub.json("/api/agent", loc)
+  const agentsRaw = await hub.json("/api/agent")
   const agents: AgentEntry[] = (agentsRaw.data ?? [])
     .filter((a: any) => !BUILTIN_AGENTS.has(a.id))
     .map((a: any) => ({
@@ -114,7 +114,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
   for (const dir of ["commands", "command"]) {
     let entries: Array<{ path: string; type: string }> = []
     try {
-      entries = await hub.list(`${root}/.config/opencode/${dir}`)
+      entries = await hub.list(`.config/opencode/${dir}`)
     } catch {
       continue
     }
@@ -129,7 +129,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
 
   let mcp: Record<string, unknown> = {}
   try {
-    const config = await hub.json("/api/config", loc)
+    const config = await hub.json("/api/config")
     const doc = (config as any[]).find((c) => c.info?.mcp?.servers)
     mcp = doc?.info?.mcp?.servers ?? {}
   } catch {}
@@ -147,7 +147,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       const name = clean.split("/").pop() ?? ""
       if (entry.type === "directory") {
         if ([".git", "node_modules", "skills", ".clawhub", ".dreams"].includes(name)) continue
-        await walkMemory(`${root}/${clean}`, `${prefix}${name}/`)
+        await walkMemory(`${clean}`, `${prefix}${name}/`)
       } else {
         if (name.includes(".conflict-")) continue
         let content: string
@@ -169,15 +169,32 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       }
     }
   }
-  try {
-    for (const entry of await hub.list(`${root}/agents`)) {
-      if (entry.type !== "directory") continue
-      const clean = entry.path.replace(/\/$/, "")
-      const name = clean.split("/").pop() ?? ""
-      if ([".git", "skills", ".clawhub", ".dreams"].includes(name)) continue
-      await walkMemory(`${root}/${clean}`, `${name}/`)
-    }
-  } catch {}
+  for (const dir of dirsOf(cfg, "memory")) {
+    try {
+      for (const entry of await hub.list(`${dir.remote}`)) {
+        if (entry.type !== "directory") continue
+        const clean = entry.path.replace(/\/$/, "")
+        const name = clean.split("/").pop() ?? ""
+        if ([".git", "node_modules", "skills", ".clawhub", ".dreams"].includes(name)) continue
+        await walkMemory(`${clean}`, `${name}/`)
+      }
+    } catch {}
+    // flat files at the root of the memory dir (e.g. markdown vault)
+    try {
+      for (const entry of await hub.list(`${dir.remote}`)) {
+        if (entry.type !== "file") continue
+        const name = entry.path.split("/").pop() ?? ""
+        if (name.startsWith(".") || name.includes(".conflict-") || name.endsWith(".log")) continue
+        try {
+          const content = await hub.read(entry.path)
+          if (content.length > 1024 * 1024 || !isText(content)) continue
+          const relCheck = safeRel(name)
+          if (!relCheck) continue
+          memory.push({ rel: relCheck, agent: "", content, sha: memorySha(content), localSha: memorySha(rewriteForNode(content, cfg)) })
+        } catch {}
+      }
+    } catch {}
+  }
   memory.sort((a, b) => a.rel.localeCompare(b.rel))
 
   // ---------- plugins ----------
@@ -200,7 +217,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     }
   }
   try {
-    const config = await hub.json("/api/config", loc)
+    const config = await hub.json("/api/config")
     for (const entry of config as any[]) collectPlugins(entry?.info)
   } catch {}
 
@@ -218,7 +235,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
         const name = clean.split("/").pop() ?? ""
         if (name === "node_modules" || name === ".git") continue
         if (entry.type === "directory") {
-          await walk(`${root}/${clean}`, `${rel}${name}/`)
+          await walk(`${clean}`, `${rel}${name}/`)
         } else {
           if (name.includes(".conflict-")) continue
           let content: string
@@ -232,7 +249,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
         }
       }
     }
-    await walk(`${root}/.config/opencode/${dir}`, `${dir}/`)
+    await walk(`.config/opencode/${dir}`, `${dir}/`)
   }
   pluginFiles.sort((a, b) => a.file.localeCompare(b.file))
 
@@ -270,7 +287,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
   }
   if (cfg.sync.models) {
     try {
-      const listed = await hub.json("/api/model", loc)
+      const listed = await hub.json("/api/model")
       for (const m of listed.data ?? []) pushModel(m)
     } catch {}
   }
@@ -496,7 +513,8 @@ export async function applyConfig(hub: Hub, snapshot: Snapshot, cfg: NodeConfig,
 
   for (const extra of snapshot.extras) {
     const file = path.join(LOCAL_CONFIG_DIR, path.basename(extra.file))
-    if (writeIfChanged(file, extra.content, stamp)) {
+    const content = rewriteForNode(extra.content, cfg)
+    if (writeIfChanged(file, content, stamp)) {
       fs.chmodSync(file, 0o600)
       result.changed = true
       result.wrote.push(file)

@@ -2,8 +2,8 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { DATA_DIR, dirsOf, expandLocal, type NodeConfig } from "./config.ts"
 
-import { DATA_DIR, type NodeConfig } from "./config.ts"
 import type { Hub } from "./hub.ts"
 import type { MemoryFile, Snapshot } from "./snapshot.ts"
 import { safeRel } from "./safe.ts"
@@ -12,19 +12,31 @@ const SKIP_DIRS = new Set([".git", "node_modules", "skills", ".clawhub", ".dream
 const SKIP_SUFFIX = [".conflict-"]
 const MAX_FILE = 1024 * 1024
 
+/** First memory-type sync dir's local root */
 export function memoryRoot(cfg: NodeConfig): string {
-  const root = cfg.memory.localRoot
-  return root.startsWith("~") ? path.join(os.homedir(), root.slice(1)) : root
+  const dir = dirsOf(cfg, "memory")[0]
+  return dir ? expandLocal(dir.local) : path.join(os.homedir(), "opencode-memory")
 }
 
 export function rewriteForNode(content: string, cfg: NodeConfig): string {
-  const remote = `${cfg.paths.remoteRoot.replace(/\/$/, "")}/agents`
-  return content.split(remote).join(memoryRoot(cfg))
+  // rewrite remote absolute paths to local equivalents for each memory dir
+  let out = content
+  for (const dir of dirsOf(cfg, "memory")) {
+    const remote = `~/${dir.remote.replace(/^~\/?/, "")}`
+    const local = expandLocal(dir.local)
+    out = out.split(remote).join(local)
+  }
+  return out
 }
 
 export function rewriteForHub(content: string, cfg: NodeConfig): string {
-  const remote = `${cfg.paths.remoteRoot.replace(/\/$/, "")}/agents`
-  return content.split(memoryRoot(cfg)).join(remote)
+  let out = content
+  for (const dir of dirsOf(cfg, "memory")) {
+    const remote = `~/${dir.remote.replace(/^~\/?/, "")}`
+    const local = expandLocal(dir.local)
+    out = out.split(local).join(remote)
+  }
+  return out
 }
 
 export function isText(content: string): boolean {
@@ -152,7 +164,9 @@ export async function pushMemory(hub: Hub, cfg: NodeConfig, snapshot: Snapshot):
     if (remote !== undefined && sha(remote) === rawSha) {
       result.unchanged++
     } else {
-      await hub.write(`${cfg.paths.remoteRoot.replace(/\/$/, "")}/${remoteRel}`, raw)
+      const memDir = dirsOf(cfg, "memory")[0]
+    const remoteBase = memDir ? memDir.remote.replace(/\/$/, "") : "opencode-memory"
+    await hub.write(`~/${remoteBase}/${rel}`, raw)
       result.uploaded.push(rel)
     }
 

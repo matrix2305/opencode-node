@@ -12,10 +12,12 @@ import {
   defaultConfig,
   hubDir,
   loadConfig,
+  parseRootFlag,
   pluginSpec,
   resolvePassword,
   saveConfig,
   type NodeConfig,
+  type SyncDir,
 } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
@@ -51,7 +53,7 @@ function info(message: string) {
 function ensureConfig(cfg: NodeConfig): Hub {
   const password = resolvePassword(cfg.hub.passwordRef)
   if (!password) fail(`no password for ${cfg.hub.url} (passwordRef: ${cfg.hub.passwordRef ?? "unset"})`)
-  return new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
+  return new Hub(cfg.hub.url, password)
 }
 
 function backup(file: string) {
@@ -147,6 +149,28 @@ function cmdInit() {
     }
   }
   const cfg = defaultConfig(hubUrl, passwordRef, hubName)
+
+  // --root remote=<path>,local=<path>[,type=setup|memory|mirror]  (repeatable)
+  const customDirs: SyncDir[] = []
+  const args = process.argv
+  for (let i = 3; i < args.length; i++) {
+    if (args[i] === "--root" && i + 1 < args.length && !args[i + 1].startsWith("--")) {
+      const dir = parseRootFlag(args[i + 1])
+      if (dir) customDirs.push(dir)
+      i++
+    } else if (args[i].startsWith("--root=")) {
+      const dir = parseRootFlag(args[i].slice(7))
+      if (dir) customDirs.push(dir)
+    }
+  }
+  if (customDirs.length) {
+    cfg.dirs = customDirs
+    info(`dirs:     ${customDirs.map((d) => `${d.remote} → ${d.local} [${d.types}]`).join(" | ")}`)
+  } else {
+    info(`dirs:     ${cfg.dirs.map((d) => `${d.remote} → ${d.local} [${d.types}]`).join(" | ")}`)
+    info("          override with: --root remote=<path>,local=<path>[,type=setup|memory|mirror]")
+  }
+
   saveConfig(cfg)
   const hub = ensureConfig(cfg)
 
@@ -167,7 +191,7 @@ function cmdInit() {
         if (plugins.filesWritten) info(`plugins:  ${plugins.filesWritten} local plugin file(s) written`)
       }
       if (cfg.sync.auth) {
-        const hubClient = new Hub(cfg.hub.url, resolvePassword(cfg.hub.passwordRef), cfg.paths.remoteRoot)
+        const hubClient = new Hub(cfg.hub.url, resolvePassword(cfg.hub.passwordRef))
         const auth = await fetchAuth(hubClient)
         if (auth) {
           const result = await applyAuthViaLocalServer(auth, cfg.activeHub)
@@ -283,7 +307,7 @@ function cmdDoctor() {
   checks.push(["plugin entry", pluginEntryPresent(pluginSpec()) ? "ok" : "missing"])
   checks.push(["cache dir", fs.existsSync(DATA_DIR) ? "ok" : "will be created"])
   checks.push(["config mode", configMode(cfg)])
-  const hub = new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
+  const hub = new Hub(cfg.hub.url, password)
   return hub
     .info()
     .then(async (hubInfo) => {

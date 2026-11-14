@@ -14,14 +14,16 @@ function tmp(prefix: string): string {
 
 function config(localRoot: string): NodeConfig {
   return {
-    version: 2,
+    version: 3,
     activeHub: "test",
     hubs: { test: { url: "https://hub.example" } },
     hub: { url: "https://hub.example" },
     node: { id: "testnode" },
-    sync: { skills: true, agents: true, commands: true, mcp: true, config: false, memory: true },
-    paths: { remoteRoot: "/home/hub", agentsRoot: "agents" },
-    memory: { enabled: true, localRoot, push: false, syncIntervalSeconds: 10 },
+    sync: { skills: true, agents: true, commands: true, mcp: true, config: false, memory: true, plugins: true, auth: true, models: true },
+    dirs: [
+      { remote: ".config/opencode", local: "~/.config/opencode", types: ["setup"] },
+      { remote: "opencode-memory", local: localRoot, types: ["memory"] },
+    ],
     cacheSeconds: 0,
   }
 }
@@ -43,7 +45,7 @@ function snapshot(entries: Snapshot["memory"]): Snapshot {
 
 test("rewrites hub paths to the node and back", () => {
   const cfg = config("/tmp/node-agents")
-  const raw = "workspace: /home/hub/agents/genesis2\n"
+  const raw = "workspace: ~/opencode-memory/genesis2\n"
   const local = rewriteForNode(raw, cfg)
   assert.match(local, /\/tmp\/node-agents\/genesis2/)
   assert.equal(rewriteForHub(local, cfg), raw)

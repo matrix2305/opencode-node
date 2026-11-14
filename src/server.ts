@@ -189,7 +189,7 @@ export default Plugin.define({
       return
     }
     current = loadSnapshot(cfg)
-    const hub = new Hub(cfg.hub.url, password, cfg.paths.remoteRoot)
+    const hub = new Hub(cfg.hub.url, password)
     log("setup:start", { location: ctx.location?.directory, hub: cfg.hub.url, cached: Boolean(current) })
 
     // Register transforms once; their callbacks always read the latest snapshot.
@@ -401,9 +401,9 @@ export default Plugin.define({
     rpc = registration as any
 
     let timer: ReturnType<typeof setInterval> | undefined
-    if (cfg.memory.enabled && cfg.memory.push && !timerStarted) {
+    if (cfg.sync.memory && !timerStarted) {
       timerStarted = true
-      const seconds = Math.max(5, cfg.memory.syncIntervalSeconds ?? 10)
+      const seconds = 10
       timer = setInterval(() => {
         if (!current) return
         if (!pendingMemory(cfg, current).length) return
