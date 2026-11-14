@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { DATA_DIR, LOG_FILE, defaultConfig, loadConfig, resolvePassword, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
+import { NodeRpc } from "./rpc.ts"
 import { buildMemoryBlock, memoryRoot, pendingMemory, pushMemory, searchMemory, storeMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
 import {
@@ -17,6 +18,7 @@ import {
 
 let current: Snapshot | null = loadSnapshot()
 let refreshing: Promise<void> | null = null
+let rpc: { events: { emit: (name: string, data: any) => unknown } } | null = null
 
 function log(...parts: unknown[]) {
   try {
@@ -164,6 +166,7 @@ export default Plugin.define({
             ...(previous?.config ? { config: previous.config } : {}),
           })
           log("refresh:ok", { changed, counts: { skills: fresh.skills.length, agents: fresh.agents.length, commands: fresh.commands.length, mcp: Object.keys(fresh.mcp).length } })
+          void rpc?.events.emit("updated", { kind: "sync", summary: summary(cfg) })
           if (changed && fresh.config) log("config:drift", "hub config changed; run: oc-node pull --config")
         } catch (err) {
           log("refresh:error", String(err))
@@ -242,6 +245,7 @@ export default Plugin.define({
           if (!current) return { content: "no snapshot" }
           const result = await pushMemory(hub, cfg, current)
           saveSnapshot(current)
+          void rpc?.events.emit("updated", { kind: "push", summary: summary(cfg) })
           return { content: JSON.stringify(result, null, 2) }
         },
       })
@@ -278,6 +282,22 @@ export default Plugin.define({
       })
     })
 
+    const registration = await ctx.rpc.register(NodeRpc, {
+      status: async () => summary(cfg),
+      sync: async () => {
+        await refresh(true)
+        return summary(cfg)
+      },
+      push: async () => {
+        if (!current) return { uploaded: [], conflicts: [], unchanged: 0, error: "no snapshot" }
+        const result = await pushMemory(hub, cfg, current)
+        saveSnapshot(current)
+        void rpc?.events.emit("updated", { kind: "push", summary: summary(cfg) })
+        return result
+      },
+    })
+    rpc = registration as any
+
     let timer: ReturnType<typeof setInterval> | undefined
     if (cfg.memory.enabled && cfg.memory.push) {
       timer = setInterval(() => {
@@ -285,6 +305,7 @@ export default Plugin.define({
         void pushMemory(hub, cfg, current)
           .then((result) => {
             saveSnapshot(current!)
+            void rpc?.events.emit("updated", { kind: "push", summary: summary(cfg) })
             if (result.uploaded.length || result.conflicts.length) log("memory:push", result)
           })
           .catch((err) => log("memory:push-error", String(err)))
@@ -297,6 +318,8 @@ export default Plugin.define({
 
     return () => {
       if (timer) clearInterval(timer)
+      rpc = null
+      void registration.dispose()
     }
   },
 })

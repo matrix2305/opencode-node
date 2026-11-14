@@ -92,7 +92,25 @@ Server slash commands:
 - `/node-sync` — force a pull.
 - `/node-push` — push memory changes.
 
-TUI part: palette/slash command **opencode-node: status** (read-only dialog).
+TUI part (palette commands, live via RPC):
+
+- **opencode-node: status** — dialog with hub/cache/counts/memory.
+- **opencode-node: sync now** — pull + toast.
+- **opencode-node: push memory** — push + conflict/upload toast.
+- Startup and `updated` event toasts.
+
+## RPC
+
+The server registers `matrix2305.opencode-node`:
+
+- `status`, `sync`, `push`
+- event `updated` (`kind`, `summary`)
+
+```bash
+curl -u opencode:<password> -X POST -H 'Content-Type: application/json' \
+  -d '{"input":{}}' \
+  'http://127.0.0.1:49374/api/rpc/matrix2305.opencode-node/status?location[directory]=/home/me'
+```
 
 ## Memory
 

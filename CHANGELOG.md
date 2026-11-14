@@ -27,10 +27,11 @@ First working release of the OpenCode node plugin.
 - Password refs: `keychain:`, `secret:`, `file:`, `env:`.
 - Config and secrets written with mode 0600; backups before every overwrite.
 
-### TUI
+### TUI / RPC
 
 - Server commands `/node-status`, `/node-sync`, `/node-push`.
-- Palette/slash command `opencode-node: status`.
+- Server RPC `matrix2305.opencode-node`: `status`, `sync`, `push` + `updated` event.
+- TUI palette commands for status/sync/push, live toasts, no JSX peers.
 
 ### Packaging
 
