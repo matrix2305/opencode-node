@@ -73,6 +73,20 @@ oc-node restart          # opencode service restart
 The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
 `node src/cli.ts <command>` (Node 23+).
 
+## Multiple hubs
+
+```bash
+oc-node hub list
+oc-node hub add work --url https://work.example --password-ref secret:opencode-work
+oc-node hub use work --pull
+oc-node hub remove work [--purge]
+```
+
+Each hub has its own `snapshot.json`, `applied.json` and skill cache under
+`~/.local/share/opencode-node/hubs/<name>/`. Local agents, commands, memory and
+`opencode.jsonc` are shared; the active hub's pull owns them (with backups).
+Legacy single-hub configs migrate automatically.
+
 ## Config/providers modes
 
 `sync.config` controls the raw hub `opencode.jsonc` (providers, models, plugins,

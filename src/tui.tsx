@@ -30,7 +30,7 @@ function formatStatus(status: any): string {
   const counts = status?.counts ?? {}
   const memory = status?.memory ?? {}
   const lines = [
-    `hub:      ${status?.hub ?? "?"}`,
+    `hub:      ${status?.hubName ? `${status.hubName} · ` : ""}${status?.hub ?? "?"}`,
     `pulled:   ${status?.lastPull ?? "never"}`,
     `skills:   ${counts.skills ?? 0}`,
     `agents:   ${counts.agents ?? 0}`,
@@ -47,7 +47,8 @@ function footerLine(status: any): string {
   const skills = status.counts?.skills ?? 0
   const memory = status.memory?.files ?? 0
   const pending = status.memory?.pending?.length ?? 0
-  return `node ${skills}s · ${memory}m${pending ? ` · ${pending}↑` : ""}`
+  const multi = (status.hubs?.length ?? 0) > 1
+  return `node${multi && status.hubName ? `:${status.hubName}` : ""} ${skills}s · ${memory}m${pending ? ` · ${pending}↑` : ""}`
 }
 
 export default Plugin.define({

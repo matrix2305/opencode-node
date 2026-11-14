@@ -21,6 +21,13 @@ First working release of the OpenCode node plugin.
   `.conflict-<node>-<timestamp>`.
 - Background push timer (default 5 minutes).
 
+### Multi-hub
+
+- Config schema v2 with `hubs` + `activeHub`; legacy config migration.
+- Per-hub snapshot/applied/skills under `hubs/<name>/`.
+- CLI `hub list|add|use|remove`, `init --hub-name`.
+- TUI status shows the active hub; footer prefixes it when multiple hubs exist.
+
 ### Config modes
 
 - `sync.config`: `off`, `manual`, `auto`.

@@ -22,7 +22,9 @@ function tmp(prefix: string): string {
 
 function config(localRoot: string): NodeConfig {
   return {
-    version: 1,
+    version: 2,
+    activeHub: "test",
+    hubs: { test: { url: "https://hub.example" } },
     hub: { url: "https://hub.example" },
     node: { id: "testnode" },
     sync: { skills: true, agents: true, commands: true, mcp: true, config: false, memory: true },

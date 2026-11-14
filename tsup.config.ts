@@ -2,7 +2,7 @@ import { defineConfig } from "tsup"
 
 export default defineConfig({
   entry: {
-    index: "src/index.ts",
+    index: "src/server.ts",
     tui: "src/tui.tsx",
     rpc: "src/rpc.ts",
     cli: "src/cli.ts",

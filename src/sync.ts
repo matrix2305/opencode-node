@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { DATA_DIR, SNAPSHOT_FILE, type NodeConfig } from "./config.ts"
+import { DATA_DIR, appliedFile, ensureHubData, skillsDir, snapshotFile, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
 import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
@@ -12,39 +12,43 @@ import type { Applied, AgentEntry, CommandEntry, MemoryFile, SkillEntry, Snapsho
 const BUILTIN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"])
 const BUILTIN_SKILLS = new Set(["opencode", "report", "browser"])
 
-export const APPLIED_FILE = path.join(DATA_DIR, "applied.json")
 export const LOCAL_CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode")
 
 export function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex")
 }
 
-export function loadSnapshot(): Snapshot | null {
+export function loadSnapshot(cfg: NodeConfig): Snapshot | null {
+  ensureHubData(cfg)
   try {
-    return JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8"))
+    return JSON.parse(fs.readFileSync(snapshotFile(cfg), "utf8"))
   } catch {
     return null
   }
 }
 
-export function saveSnapshot(snapshot: Snapshot) {
-  fs.mkdirSync(DATA_DIR, { recursive: true })
-  const tmp = SNAPSHOT_FILE + ".tmp"
+export function saveSnapshot(cfg: NodeConfig, snapshot: Snapshot) {
+  const dir = ensureHubData(cfg)
+  const file = path.join(dir, "snapshot.json")
+  fs.mkdirSync(dir, { recursive: true })
+  const tmp = file + ".tmp"
   fs.writeFileSync(tmp, JSON.stringify(snapshot, null, 2) + "\n", { mode: 0o600 })
-  fs.renameSync(tmp, SNAPSHOT_FILE)
+  fs.renameSync(tmp, file)
 }
 
-export function loadApplied(): Applied | null {
+export function loadApplied(cfg: NodeConfig): Applied | null {
+  ensureHubData(cfg)
   try {
-    return JSON.parse(fs.readFileSync(APPLIED_FILE, "utf8"))
+    return JSON.parse(fs.readFileSync(appliedFile(cfg), "utf8"))
   } catch {
     return null
   }
 }
 
-export function saveApplied(applied: Applied) {
-  fs.mkdirSync(DATA_DIR, { recursive: true })
-  fs.writeFileSync(APPLIED_FILE, JSON.stringify(applied, null, 2) + "\n", { mode: 0o600 })
+export function saveApplied(cfg: NodeConfig, applied: Applied) {
+  const dir = ensureHubData(cfg)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(appliedFile(cfg), JSON.stringify(applied, null, 2) + "\n", { mode: 0o600 })
 }
 
 function hashList(values: unknown[]): string {
@@ -245,7 +249,7 @@ export function materialize(snapshot: Snapshot, cfg: NodeConfig): MaterializeRes
   let changed = false
 
   for (const skill of snapshot.skills) {
-    const file = path.join(DATA_DIR, "skills", skill.id, "SKILL.md")
+    const file = path.join(skillsDir(cfg), skill.id, "SKILL.md")
     if (writeIfChanged(file, skill.content, stamp)) changed = true
   }
 
@@ -280,7 +284,7 @@ export interface ConfigResult {
 }
 
 /** Write the hub config (raw JSONC) locally, keeping the node plugin entry. */
-export function applyConfig(snapshot: Snapshot, spec: string): ConfigResult {
+export function applyConfig(snapshot: Snapshot, cfg: NodeConfig, spec: string): ConfigResult {
   const result: ConfigResult = { changed: false, wrote: [], removed: [] }
   if (!snapshot.config) return result
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")

@@ -10,6 +10,7 @@ import {
   DATA_DIR,
   configMode,
   defaultConfig,
+  hubDir,
   loadConfig,
   pluginSpec,
   resolvePassword,
@@ -20,6 +21,7 @@ import { Hub } from "./hub.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import { ensurePluginSpec } from "./jsonc.ts"
 import { applyConfig, loadApplied, loadSnapshot, materialize, pull, saveApplied, saveSnapshot } from "./sync.ts"
+import type { Snapshot } from "./snapshot.ts"
 
 function localConfigDir(): string {
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "opencode")
@@ -93,10 +95,10 @@ function restartService() {
   if (result.error) console.error("oc-node: could not run `opencode service restart`:", result.error.message)
 }
 
-function recordApplied(snapshot: NonNullable<ReturnType<typeof loadSnapshot>>, configChanged = false) {
-  const previous = loadApplied()
+function recordApplied(snapshot: Snapshot, cfg: NodeConfig, configChanged = false) {
+  const previous = loadApplied(cfg)
   const config = configChanged ? snapshot.hashes.config : previous?.config
-  saveApplied({
+  saveApplied(cfg, {
     skills: snapshot.hashes.skills,
     agents: snapshot.hashes.agents,
     commands: snapshot.hashes.commands,
@@ -105,7 +107,7 @@ function recordApplied(snapshot: NonNullable<ReturnType<typeof loadSnapshot>>, c
   })
 }
 
-function printSummary(snapshot: ReturnType<typeof loadSnapshot>) {
+function printSummary(snapshot: Snapshot | null) {
   if (!snapshot) return info("no snapshot (run: oc-node pull)")
   info(`hub:      ${snapshot.hub}`)
   info(`pulled:   ${new Date(snapshot.fetchedAt).toISOString()}`)
@@ -132,7 +134,15 @@ function cmdInit() {
   }
   if (!passwordRef) fail("pass --password-ref (e.g. keychain:opencode-matrix2305) or --password")
 
-  const cfg = defaultConfig(hubUrl, passwordRef)
+  let hubName = arg("--hub-name")
+  if (!hubName) {
+    try {
+      hubName = new URL(hubUrl).hostname.split(".")[0] || "default"
+    } catch {
+      hubName = "default"
+    }
+  }
+  const cfg = defaultConfig(hubUrl, passwordRef, hubName)
   saveConfig(cfg)
   const hub = ensureConfig(cfg)
 
@@ -143,16 +153,16 @@ function cmdInit() {
   return hub.info().then((hubInfo) => {
     info(`hub:      ${hubInfo.hostname ?? "?"} · OpenCode ${hubInfo.version}`)
     return pull(hub, cfg).then((snapshot) => {
-      saveSnapshot(snapshot)
+      saveSnapshot(cfg, snapshot)
       materialize(snapshot, cfg)
       let configChanged = false
       if (flag("--config")) {
         info("warning:  local opencode.jsonc will be replaced by the hub config (backup kept)")
-        const result = applyConfig(snapshot, pluginSpec())
+        const result = applyConfig(snapshot, cfg, pluginSpec())
         configChanged = result.changed
         if (result.changed) info("config:   hub opencode.jsonc written (backup kept)")
       }
-      recordApplied(snapshot, configChanged)
+      recordApplied(snapshot, cfg, configChanged)
       printSummary(snapshot)
       if (flag("--restart")) restartService()
       else info("next:     restart OpenCode so the plugin and config load (oc-node restart)")
@@ -165,16 +175,16 @@ function cmdPull() {
   if (!cfg) fail("not initialised (run: oc-node init --hub <url> --password-ref ...)")
   const hub = ensureConfig(cfg)
   return pull(hub, cfg).then((snapshot) => {
-    saveSnapshot(snapshot)
+    saveSnapshot(cfg, snapshot)
     const result = materialize(snapshot, cfg)
     let configChanged = false
     if (flag("--config")) {
-      const written = applyConfig(snapshot, pluginSpec())
+      const written = applyConfig(snapshot, cfg, pluginSpec())
       configChanged = written.changed
       if (written.changed) info("config:   hub opencode.jsonc written")
       else info("config:   already up to date")
     }
-    recordApplied(snapshot, configChanged)
+    recordApplied(snapshot, cfg, configChanged)
     printSummary(snapshot)
     info(`files:    ${result.skillFiles} skills, ${result.agentFiles} agents, ${result.commandFiles} commands`)
     if (configChanged) info("next:     restart OpenCode to apply config/providers (oc-node restart)")
@@ -185,11 +195,11 @@ function cmdPull() {
 function cmdPush() {
   const cfg = loadConfig()
   if (!cfg) fail("not initialised")
-  const snapshot = loadSnapshot()
+  const snapshot = loadSnapshot(cfg)
   if (!snapshot) fail("no snapshot (run: oc-node pull)")
   const hub = ensureConfig(cfg)
   return pushMemory(hub, cfg, snapshot).then((result) => {
-    saveSnapshot(snapshot)
+    saveSnapshot(cfg, snapshot)
     info(`uploaded: ${result.uploaded.join(", ") || "-"}`)
     info(`conflicts: ${result.conflicts.join(", ") || "-"}`)
     info(`unchanged: ${result.unchanged}`)
@@ -204,11 +214,12 @@ function cmdStatus() {
     return
   }
   info(`config:   ${CONFIG_FILE}`)
-  info(`hub:      ${cfg.hub.url}`)
+  info(`hub:      ${cfg.activeHub} · ${cfg.hub.url}`)
+  info(`hubs:     ${Object.keys(cfg.hubs).join(", ")}`)
   info(`password: ${cfg.hub.passwordRef ?? "unset"}`)
   info(`config:   mode=${configMode(cfg)} (oc-node config --mode auto|manual|off)`)
   info(`plugin:   ${pluginEntryPresent(pluginSpec()) ? "installed" : "missing in local config"}`)
-  const snapshot = loadSnapshot()
+  const snapshot = loadSnapshot(cfg)
   if (!snapshot) {
     info("snapshot: none")
     return
@@ -217,7 +228,7 @@ function cmdStatus() {
   printSummary(snapshot)
   const pending = pendingMemory(cfg, snapshot)
   info(`pending:  ${pending.length ? pending.join(", ") : "-"}`)
-  const applied = loadApplied()
+  const applied = loadApplied(cfg)
   if (applied) {
     info(`applied:  skills=${applied.skills === snapshot.hashes.skills} agents=${applied.agents === snapshot.hashes.agents} commands=${applied.commands === snapshot.hashes.commands} mcp=${applied.mcp === snapshot.hashes.mcp}`)
     if (snapshot.hashes.config) info(`config:   ${applied.config === snapshot.hashes.config ? "in sync" : "drift (oc-node pull --config)"}`)
@@ -243,7 +254,7 @@ function cmdDoctor() {
       const agents = await hub.json("/api/agent")
       checks.push(["skills endpoint", `${skills.data?.length ?? 0}`])
       checks.push(["agents endpoint", `${agents.data?.length ?? 0}`])
-      const snapshot = loadSnapshot()
+      const snapshot = loadSnapshot(cfg)
       if (snapshot) checks.push(["snapshot", `${snapshot.skills.length} skills / ${snapshot.agents.length} agents`])
       for (const [name, value] of checks) info(`${name.padEnd(16)} ${value}`)
       if (password && cfg.hub.url) info("result           ok")
@@ -282,6 +293,59 @@ function cmdRestore() {
   info("next: oc-node restart")
 }
 
+function cmdHub() {
+  const cfg = loadConfig()
+  if (!cfg) fail("not initialised")
+  const sub = process.argv[3]
+  const positional = process.argv[4] && !process.argv[4].startsWith("--") ? process.argv[4] : undefined
+  const name = arg("--name") ?? positional
+
+  if (!sub || sub === "list") {
+    for (const [key, value] of Object.entries(cfg.hubs)) {
+      info(`${key === cfg.activeHub ? "*" : " "} ${key.padEnd(18)} ${value.url}`)
+    }
+    return
+  }
+
+  if (sub === "add") {
+    if (!name) fail("usage: oc-node hub add <name> --url <url> --password-ref <ref> [--use]")
+    const url = arg("--url")
+    const ref = arg("--password-ref")
+    if (!url || !ref) fail("hub add requires --url and --password-ref")
+    if (cfg.hubs[name]) fail(`hub already exists: ${name}`)
+    cfg.hubs[name] = { url: url.replace(/\/$/, ""), passwordRef: ref }
+    if (flag("--use") || Object.keys(cfg.hubs).length === 1) cfg.activeHub = name
+    saveConfig(cfg)
+    info(`added hub ${name}: ${cfg.hubs[name].url}${cfg.activeHub === name ? " (active)" : ""}`)
+    return
+  }
+
+  if (sub === "use") {
+    if (!name || !cfg.hubs[name]) fail(`unknown hub: ${name ?? ""}`)
+    cfg.activeHub = name
+    saveConfig(cfg)
+    info(`active hub: ${name} · ${cfg.hub.url}`)
+    if (flag("--pull")) return cmdPull()
+    info("next: oc-node pull (or oc-node restart) to load its setup")
+    return
+  }
+
+  if (sub === "remove") {
+    if (!name || !cfg.hubs[name]) fail(`unknown hub: ${name ?? ""}`)
+    if (cfg.activeHub === name) fail("cannot remove the active hub; switch to another first")
+    delete cfg.hubs[name]
+    saveConfig(cfg)
+    if (flag("--purge")) {
+      fs.rmSync(hubDir(name), { recursive: true, force: true })
+      info(`purged ${hubDir(name)}`)
+    }
+    info(`removed hub ${name}`)
+    return
+  }
+
+  fail("usage: oc-node hub <list|add|use|remove>")
+}
+
 function cmdRestart() {
   restartService()
 }
@@ -297,7 +361,7 @@ function cmdConfig() {
     info(`config mode: ${mode}`)
     if (mode !== "auto") return
   }
-  const snapshot = loadSnapshot()
+  const snapshot = loadSnapshot(cfg)
   if (!snapshot) fail("no snapshot (run: oc-node pull)")
   if (flag("--dry-run")) {
     info(`would write: ${path.join(localConfigDir(), "opencode.jsonc")}`)
@@ -305,10 +369,10 @@ function cmdConfig() {
     return
   }
   if (mode === "auto" && flag("--no-apply")) return
-  const result = applyConfig(snapshot, pluginSpec())
+  const result = applyConfig(snapshot, cfg, pluginSpec())
   if (result.changed) {
-    const applied = loadApplied() ?? { skills: "", agents: "", commands: "", mcp: "" }
-    saveApplied({ ...applied, config: snapshot.hashes.config })
+    const applied = loadApplied(cfg) ?? { skills: "", agents: "", commands: "", mcp: "" }
+    saveApplied(cfg, { ...applied, config: snapshot.hashes.config })
     info(`wrote: ${result.wrote.join(", ") || "-"}`)
     if (result.removed.length) info(`removed: ${result.removed.join(", ")}`)
     info("next: restart OpenCode (oc-node restart)")
@@ -330,14 +394,17 @@ function main() {
       return cmdDoctor()
     case "config":
       return cmdConfig()
+    case "hub":
+      return cmdHub()
     case "restore":
       return cmdRestore()
     case "restart":
       return cmdRestart()
     default:
-      info("usage: oc-node <init|pull|push|status|doctor|config|restore|restart>")
-      info("  init --hub <url> --password-ref keychain:<service> [--config] [--restart]")
+      info("usage: oc-node <init|pull|push|status|doctor|config|hub|restore|restart>")
+      info("  init --hub <url> --password-ref keychain:<service> [--hub-name <name>] [--config] [--restart]")
       info("  pull [--config] | push")
+      info("  hub list | hub add <name> --url <url> --password-ref <ref> [--use] | hub use <name> [--pull] | hub remove <name> [--purge]")
       info("  status | doctor | config [--mode auto|manual|off] [--dry-run] | restore [--from <stamp>] | restart")
       process.exit(command ? 1 : 0)
   }
