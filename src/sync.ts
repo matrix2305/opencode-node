@@ -6,6 +6,7 @@ import path from "node:path"
 import { DATA_DIR, appliedFile, ensureHubData, skillsDir, snapshotFile, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
 import { ensurePluginEntries, ensurePluginSpec } from "./jsonc.ts"
+import { fetchAuth } from "./auth.ts"
 import { isText, materializeMemory, rewriteForNode, sha as memorySha } from "./memory.ts"
 import type { Applied, AgentEntry, CommandEntry, MemoryFile, PluginEntry, SkillEntry, Snapshot } from "./snapshot.ts"
 
@@ -226,14 +227,15 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     if (content.length <= 256 * 1024) pluginPackage = { content, sha: sha256(content) }
   } catch {}
 
-  let auth: Snapshot["auth"]
-  try {
-    const raw = await hub.read(".local/share/opencode/auth.json")
-    if (raw.length <= 256 * 1024) {
-      const entries = JSON.parse(raw)
-      if (entries && typeof entries === "object") auth = { entries, sha: sha256(raw) }
+  let authCount: number | undefined
+  let authSha: string | undefined
+  if (cfg.sync.auth) {
+    const auth = await fetchAuth(hub)
+    if (auth) {
+      authCount = Object.keys(auth.entries).length
+      authSha = sha256(JSON.stringify(Object.keys(auth.entries).sort()))
     }
-  } catch {}
+  }
 
   let configFile: Snapshot["config"]
   for (const candidate of [".config/opencode/opencode.jsonc", ".config/opencode/opencode.json"]) {
@@ -264,7 +266,7 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
     plugins: pluginEntries,
     pluginFiles,
     ...(pluginPackage ? { pluginPackage } : {}),
-    ...(auth ? { auth } : {}),
+    ...(authCount !== undefined ? { authCount } : {}),
     ...(configFile ? { config: configFile } : {}),
     extras,
     hashes: {
@@ -274,7 +276,8 @@ export async function pull(hub: Hub, cfg: NodeConfig): Promise<Snapshot> {
       mcp: sha256(JSON.stringify(mcp)),
       memory: hashList(memory),
       plugins: sha256(JSON.stringify(pluginEntries.map((p) => p.value).concat(pluginFiles.map((f) => f.sha)))),
-      ...(auth ? { auth: auth.sha } : {}),
+      ...(authSha ? { auth: authSha } : {}),
+
       ...(configFile ? { config: configFile.sha } : {}),
     },
   }
@@ -352,57 +355,6 @@ export function materialize(snapshot: Snapshot, cfg: NodeConfig): MaterializeRes
     memoryKeptLocal: memory.keptLocal,
     changed,
   }
-}
-
-function localDataDir(): string {
-  return path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"), "opencode")
-}
-
-export interface AuthResult {
-  merged: string[]
-  unchanged: number
-}
-
-/**
- * Merge the hub's provider credentials into the local auth.json.
- * Hub entries win for the providers the hub defines; local-only entries stay.
- * Never log the contents; write with mode 0600 and a backup.
- */
-export function applyAuth(snapshot: Snapshot): AuthResult {
-  const result: AuthResult = { merged: [], unchanged: 0 }
-  if (!snapshot.auth || !Object.keys(snapshot.auth.entries).length) return result
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const target = path.join(localDataDir(), "auth.json")
-
-  let local: Record<string, unknown> = {}
-  try {
-    local = JSON.parse(fs.readFileSync(target, "utf8"))
-  } catch {}
-
-  const merged = { ...local }
-  let changed = false
-  for (const [provider, entry] of Object.entries(snapshot.auth.entries)) {
-    const current = JSON.stringify(merged[provider] ?? null)
-    const incoming = JSON.stringify(entry)
-    if (current === incoming) {
-      result.unchanged++
-      continue
-    }
-    merged[provider] = entry
-    result.merged.push(provider)
-    changed = true
-  }
-  if (!changed) return result
-
-  backupFile(target, stamp)
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  const tmp = target + ".tmp"
-  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 })
-  fs.renameSync(tmp, target)
-  try {
-    fs.chmodSync(target, 0o600)
-  } catch {}
-  return result
 }
 
 export interface PluginsResult {

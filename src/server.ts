@@ -4,6 +4,7 @@ import path from "node:path"
 
 import { DATA_DIR, LOG_FILE, configMode, defaultConfig, loadConfig, pluginSpec, resolvePassword, skillsDir, type NodeConfig } from "./config.ts"
 import { Hub } from "./hub.ts"
+import { applyAuthMemory, fetchAuth, type ConnectResult } from "./auth.ts"
 import { NodeRpc } from "./rpc.ts"
 import { pendingMemory, pushMemory } from "./memory.ts"
 import type { Snapshot } from "./snapshot.ts"
@@ -82,6 +83,25 @@ function summary(cfg: NodeConfig) {
   }
 }
 
+async function applyAuthLive(ctx: any, hub: Hub, cfg: NodeConfig): Promise<ConnectResult | null> {
+  if (!cfg.sync.auth) return null
+  try {
+    const auth = await fetchAuth(hub)
+    if (!auth) return null
+    // The plugin API cannot list/remove credentials, so connect with a stable
+    // label; the server keeps one credential per (integration, label) pair.
+    const result = await applyAuthMemory(auth, {
+      hubName: cfg.activeHub,
+      connect: (input) => ctx.integration.connect.key(input),
+    })
+    if (result.connected.length || result.errors.length) log("auth:applied", { connected: result.connected, errors: result.errors.map((e) => e.provider) })
+    return result
+  } catch (err) {
+    log("auth:error", String(err))
+    return null
+  }
+}
+
 function maybeApplyConfig(cfg: NodeConfig, snapshot: Snapshot): boolean {
   if (cfg.sync.config !== "auto" || !snapshot.config) return false
   const previous = loadApplied(cfg)
@@ -143,6 +163,7 @@ export default Plugin.define({
     let applied = false
     if (current) {
       materialize(current, cfg)
+      void applyAuthLive(ctx, hub, cfg)
       if (cfg.sync.plugins) {
         try {
           applyPlugins(current, pluginSpec())
@@ -213,6 +234,11 @@ export default Plugin.define({
             ...(previous?.config ? { config: previous.config } : {}),
           })
           log("refresh:ok", { changed, counts: { skills: fresh.skills.length, agents: fresh.agents.length, commands: fresh.commands.length, mcp: Object.keys(fresh.mcp).length } })
+          try {
+            await applyAuthLive(ctx, hub, cfg)
+          } catch (err) {
+            log("auth:error", String(err))
+          }
           try {
             maybeApplyConfig(cfg, fresh)
           } catch (err) {

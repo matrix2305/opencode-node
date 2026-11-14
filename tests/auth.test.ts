@@ -1,70 +1,49 @@
 import assert from "node:assert/strict"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 import test from "node:test"
 
-import { applyAuth } from "../src/sync.ts"
-import type { Snapshot } from "../src/snapshot.ts"
+import { applyAuthMemory, type AuthEntries } from "../src/auth.ts"
 
-function home(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "ocn-auth-"))
+function auth(entries: Record<string, { type?: string; key?: string }>): AuthEntries {
+  return { entries, sha: "x" }
 }
 
-function snapshotWith(entries: Record<string, unknown>): Snapshot {
-  return {
-    version: 1,
-    hub: "https://hub.example",
-    fetchedAt: Date.now(),
-    skills: [],
-    agents: [],
-    commands: [],
-    mcp: {},
-    memory: [],
-    plugins: [],
-    pluginFiles: [],
-    extras: [],
-    hashes: { skills: "", agents: "", commands: "", mcp: "", memory: "", plugins: "" },
-    auth: { entries: entries as any, sha: "x" },
-  }
-}
-
-test("merges hub credentials and keeps local-only providers", () => {
-  const dir = home()
-  process.env.XDG_DATA_HOME = path.join(dir, ".local", "share")
-  const target = path.join(dir, ".local", "share", "opencode", "auth.json")
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.writeFileSync(target, JSON.stringify({ deepinfra: { type: "api", key: "local-key" } }))
-
-  const result = applyAuth(snapshotWith({ "opencode-go": { type: "api", key: "hub-key" } }))
-
-  assert.deepEqual(result.merged, ["opencode-go"])
-  const after = JSON.parse(fs.readFileSync(target, "utf8"))
-  assert.equal(after["opencode-go"].key, "hub-key")
-  assert.equal(after.deepinfra.key, "local-key")
-  assert.equal(fs.statSync(target).mode & 0o777, 0o600)
-  delete process.env.XDG_DATA_HOME
+test("connects hub credentials live and reports providers", async () => {
+  const calls: Array<{ integrationID: string; key: string; label?: string }> = []
+  const result = await applyAuthMemory(auth({ "opencode-go": { type: "api", key: "k1" } }), {
+    hubName: "matrix2305",
+    connect: async (input) => {
+      calls.push(input)
+    },
+  })
+  assert.deepEqual(result.connected, ["opencode-go"])
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].key, "k1")
+  assert.equal(calls[0].label, "opencode-node:matrix2305")
 })
 
-test("is idempotent when entries already match", () => {
-  const dir = home()
-  process.env.XDG_DATA_HOME = path.join(dir, ".local", "share")
-  const target = path.join(dir, ".local", "share", "opencode", "auth.json")
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.writeFileSync(target, JSON.stringify({ "opencode-go": { type: "api", key: "hub-key" } }))
-
-  const result = applyAuth(snapshotWith({ "opencode-go": { type: "api", key: "hub-key" } }))
-  assert.deepEqual(result.merged, [])
-  assert.equal(result.unchanged, 1)
-  delete process.env.XDG_DATA_HOME
+test("skips entries without keys and collects connect errors", async () => {
+  const result = await applyAuthMemory(auth({ broken: {}, "opencode-go": { key: "k" } }), {
+    hubName: "h",
+    connect: async (input) => {
+      if (input.integrationID === "opencode-go") throw new Error("boom")
+    },
+  })
+  assert.equal(result.skipped, 1)
+  assert.deepEqual(result.connected, [])
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0].provider, "opencode-go")
 })
 
-test("creates auth.json when missing", () => {
-  const dir = home()
-  process.env.XDG_DATA_HOME = path.join(dir, ".local", "share")
-  const result = applyAuth(snapshotWith({ "opencode-go": { type: "api", key: "hub-key" } }))
-  assert.deepEqual(result.merged, ["opencode-go"])
-  const target = path.join(dir, ".local", "share", "opencode", "auth.json")
-  assert.equal(JSON.parse(fs.readFileSync(target, "utf8"))["opencode-go"].key, "hub-key")
-  delete process.env.XDG_DATA_HOME
+test("removes previous hub-labelled credentials before connecting", async () => {
+  const removed: string[] = []
+  const result = await applyAuthMemory(auth({ "opencode-go": { key: "k" } }), {
+    hubName: "work",
+    list: async () => [{ id: "c1", label: "opencode-node:work" }, { id: "c2", label: "API key" }],
+    remove: async (id) => {
+      removed.push(id)
+    },
+    connect: async () => {},
+  })
+  assert.deepEqual(removed, ["c1"])
+  assert.deepEqual(result.connected, ["opencode-go"])
 })

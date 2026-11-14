@@ -23,8 +23,10 @@ First working release of the OpenCode node plugin.
 
 ### Auth
 
-- Hub `auth.json` credentials merged into the local file during `init`/`pull`
-  (`sync.auth`, default on; hub wins for its providers; local-only kept).
+- Hub provider credentials connected **live** into the local server's credential
+  store (`connect/key`, stable per-hub label) during `init`/`pull`/refresh.
+- No keys in files: `auth.json` is neither read nor written by the plugin; the
+  snapshot stores only a provider count and a names-hash.
 
 ### Plugins
 
