@@ -1,0 +1,26 @@
+{
+  "name": "@matrix2305/opencode-node",
+  "version": "0.0.1",
+  "description": "OpenCode node plugin: load agents, skills, commands, MCP servers and memory from a remote OpenCode hub.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.0 <3"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.3.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
