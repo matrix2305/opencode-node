@@ -233,6 +233,33 @@ function cmdDoctor() {
     })
 }
 
+function cmdRestore() {
+  const base = path.join(DATA_DIR, "backup")
+  if (!fs.existsSync(base)) fail("no backups yet")
+  const stamps = fs.readdirSync(base).filter((d) => fs.statSync(path.join(base, d)).isDirectory()).sort()
+  if (!stamps.length) fail("no backups yet")
+  const stamp = arg("--from") ?? stamps[stamps.length - 1]
+  const root = path.join(base, stamp)
+  if (!fs.existsSync(root)) fail(`backup not found: ${stamp}`)
+  let restored = 0
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const src = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(src)
+      else {
+        const rel = path.relative(root, src)
+        const dest = path.join(os.homedir(), rel)
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(src, dest)
+        restored++
+      }
+    }
+  }
+  walk(root)
+  info(`restored ${restored} files from ${stamp}`)
+  info("next: oc-node restart")
+}
+
 function cmdRestart() {
   restartService()
 }
@@ -265,13 +292,15 @@ function main() {
       return cmdDoctor()
     case "config":
       return cmdConfig()
+    case "restore":
+      return cmdRestore()
     case "restart":
       return cmdRestart()
     default:
-      info("usage: oc-node <init|pull|status|doctor|config|restart>")
+      info("usage: oc-node <init|pull|status|doctor|config|restore|restart>")
       info("  init --hub <url> --password-ref keychain:<service> [--config] [--restart]")
       info("  pull [--config]")
-      info("  status | doctor | config | restart")
+      info("  status | doctor | config | restore [--from <stamp>] | restart")
       process.exit(command ? 1 : 0)
   }
 }
