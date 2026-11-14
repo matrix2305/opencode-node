@@ -34,6 +34,9 @@ First working release of the OpenCode node plugin.
 - Config and secrets written with mode 0600; backups before every overwrite.
 
 ### TUI / RPC
+- Home footer status (`node 9s · 62m`) via Solid/OpenTUI slot, reactive to RPC
+  events and a 30 s poll; TUI errors logged to `tui.log`.
+
 
 - Server commands `/node-status`, `/node-sync`, `/node-push`.
 - Server RPC `matrix2305.opencode-node`: `status`, `sync`, `push` + `updated` event.

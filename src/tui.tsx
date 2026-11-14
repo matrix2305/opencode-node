@@ -1,6 +1,30 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { createSignal } from "solid-js"
 import { Plugin } from "@opencode/plugin/tui"
 
 import { NodeRpc } from "./rpc.ts"
+
+function log(...parts: unknown[]) {
+  try {
+    const dir = path.join(os.homedir(), ".local", "share", "opencode-node")
+    fs.mkdirSync(dir, { recursive: true })
+    const text = parts
+      .map((p) => {
+        if (typeof p === "string") return p
+        try {
+          const err = p as any
+          if (err?.message) return `${err.name ?? "Error"}: ${err.message}\n${err.stack ?? ""}`
+          return JSON.stringify(p)
+        } catch {
+          return String(p)
+        }
+      })
+      .join(" ")
+    fs.appendFileSync(path.join(dir, "tui.log"), `[${new Date().toISOString()}] ${text}\n`)
+  } catch {}
+}
 
 function formatStatus(status: any): string {
   const counts = status?.counts ?? {}
@@ -18,10 +42,20 @@ function formatStatus(status: any): string {
   return lines.join("\n")
 }
 
+function footerLine(status: any): string {
+  if (!status) return "node …"
+  const skills = status.counts?.skills ?? 0
+  const memory = status.memory?.files ?? 0
+  const pending = status.memory?.pending?.length ?? 0
+  return `node ${skills}s · ${memory}m${pending ? ` · ${pending}↑` : ""}`
+}
+
 export default Plugin.define({
   id: "opencode-node.tui",
   async setup(context) {
     const rpc = context.client.rpc(NodeRpc)
+    const [status, setStatus] = createSignal<any>(null)
+
     const toast = (message: string, variant?: "success" | "warning" | "error") => {
       context.ui.toast.show({
         title: "opencode-node",
@@ -31,17 +65,21 @@ export default Plugin.define({
       })
     }
 
-    try {
-      const status = await rpc.status({})
-      const counts: any = (status as any)?.counts ?? {}
-      const memory: any = (status as any)?.memory ?? {}
-      toast(`connected · ${counts.skills ?? 0} skills · ${memory.files ?? 0} memory files`, "success")
-    } catch {
-      toast("server unreachable", "error")
+    const refresh = async () => {
+      try {
+        setStatus(await rpc.status({}))
+      } catch (err) {
+        log("status error", err)
+        setStatus(null)
+      }
     }
+
+    void refresh()
 
     const unsubscribe = rpc.events.on("updated", (event: any) => {
       const data = event?.data ?? {}
+      if (data.summary) setStatus(data.summary)
+      else void refresh()
       if (data.kind === "sync") toast("setup synced from hub", "success")
       if (data.kind === "config") toast("config updated · restart OpenCode", "warning")
       if (data.kind === "push") {
@@ -49,6 +87,13 @@ export default Plugin.define({
         const pending: string[] = summary?.memory?.pending ?? []
         toast(pending.length ? `memory pushed · ${pending.length} pending` : "memory pushed", pending.length ? "warning" : "success")
       }
+    })
+
+    const timer = setInterval(() => void refresh(), 30_000)
+
+    const footer = context.ui.slot({
+      append: "home.footer.status",
+      render: () => <text fg={context.theme.text.base}>{footerLine(status())}</text>,
     })
 
     context.keymap.layer(() => ({
@@ -61,8 +106,9 @@ export default Plugin.define({
           palette: true,
           run: async () => {
             try {
-              const status = await rpc.status({})
-              await context.ui.dialog.alert({ title: "opencode-node", message: formatStatus(status) })
+              const current = await rpc.status({})
+              setStatus(current)
+              await context.ui.dialog.alert({ title: "opencode-node", message: formatStatus(current) })
             } catch (err) {
               toast(String(err), "error")
             }
@@ -76,9 +122,8 @@ export default Plugin.define({
           run: async () => {
             try {
               toast("syncing from hub…")
-              const status = await rpc.sync({})
-              const counts: any = (status as any)?.counts ?? {}
-              toast(`synced · ${counts.skills ?? 0} skills`, "success")
+              setStatus(await rpc.sync({}))
+              toast("synced", "success")
             } catch (err) {
               toast(String(err), "error")
             }
@@ -94,6 +139,7 @@ export default Plugin.define({
               const result: any = await rpc.push({})
               if (result?.conflicts?.length) toast(`${result.conflicts.length} conflict(s)`, "warning")
               else toast(`${result?.uploaded?.length ?? 0} uploaded`, "success")
+              void refresh()
             } catch (err) {
               toast(String(err), "error")
             }
@@ -104,7 +150,9 @@ export default Plugin.define({
     }))
 
     return () => {
+      clearInterval(timer)
       unsubscribe()
+      footer?.()
     }
   },
 })

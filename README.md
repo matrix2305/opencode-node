@@ -4,7 +4,7 @@ A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
 file-based memory from there.
 
-Status: **M3 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
+Status: **M6 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
 commands, conflict-safe push, tests, build and publish pipeline.
 
 ## How it works
@@ -114,8 +114,9 @@ Server slash commands:
 - `/node-sync` — force a pull.
 - `/node-push` — push memory changes.
 
-TUI part (palette commands, live via RPC):
+TUI part (home footer + palette commands, live via RPC):
 
+- footer status: `node 9s · 62m` (skills · memory, `↑` = pending)
 - **opencode-node: status** — dialog with hub/cache/counts/memory.
 - **opencode-node: sync now** — pull + toast.
 - **opencode-node: push memory** — push + conflict/upload toast.
