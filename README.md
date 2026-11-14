@@ -6,7 +6,7 @@ A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
 file-based memory from there.
 
-Status: **M9 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
+Status: **0.2.0** — setup + memory sync, CLI, cache-first startup, TUI
 commands, conflict-safe push, tests, build and publish pipeline.
 
 ## How it works
@@ -41,6 +41,17 @@ npm i -g @matrix2305/opencode-node
 oc-node init \
   --hub https://matrix2305.tailbd26da.ts.net \
   --password-ref keychain:opencode-matrix2305
+```
+
+With custom sync dirs:
+
+```bash
+oc-node init \
+  --hub https://hub.example \
+  --password-ref keychain:my-hub \
+  --root remote=.config/opencode,local=~/.config/opencode,type=setup \
+  --root remote=opencode-memory,local=~/opencode-memory,type=memory \
+  --root remote=shared-docs,local=~/docs,type=mirror
 ```
 
 From this repo:
@@ -160,6 +171,7 @@ records `applied.config`, backs up every overwritten file, and logs
 | Commands | `~/.config/opencode/commands/<name>.md` + `ctx.command.reload()` |
 | MCP | `ctx.mcp.transform` from the hub config |
 | Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved, `off`/`manual`/`auto` modes |
+| Sync dirs | configurable at init (`--root`): setup / memory / mirror types, repeatable |
 | Memory | `~/agents/<agent>/` folder mirror with conflict-safe push (no memory tools; the hub memory plugin does that) |
 | Plugins | hub `plugins` list merged into the local config, `plugin/` files copied, `package.json` dependencies merged |
 | Auth | hub provider credentials connected **live** into the local OpenCode server (`connect/key`); never written to files |

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0
+
+### Config v3: configurable sync dirs
+
+- `dirs[]` replaces `paths`/`memory`/`extraDirs` — every synced folder is now a
+  first-class config entry:
+  ```json
+  "dirs": [
+    { "remote": ".config/opencode", "local": "~/.config/opencode", "types": ["setup"] },
+    { "remote": "opencode-memory", "local": "~/opencode-memory", "types": ["memory"] }
+  ]
+  ```
+- Types: `setup` (OpenCode config sync), `memory` (bidirectional mirror),
+  `mirror` (pull-only).
+- `oc-node init` accepts repeatable `--root remote=<p>,local=<p>[,type=<t>]`.
+- v2 configs auto-migrate to v3 dirs.
+- No hardcoded remote paths — the hub resolves relative paths from its own home.
+
+### Memory
+
+- Markdown vault sync (flat `.md` files at the root of a memory dir) alongside
+  the agent-workspace layout.
+- Path rewriting across all memory sync dirs.
+
+### Fixes carried from the audit
+
+- Auth credential dedup, empty model-list guard, path traversal protection,
+  push lock, backup rotation, redacted snapshot config, service.json URL.
+
 ## 0.1.1
 
 ### Fixes
