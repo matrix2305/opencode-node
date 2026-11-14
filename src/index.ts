@@ -247,6 +247,37 @@ export default Plugin.define({
       })
     })
 
+    await ctx.command.transform((editor) => {
+      editor.add({
+        name: "node-status",
+        description: "Show opencode-node status (hub, cache, memory)",
+        execute: async ({ sessionID }) => {
+          await ctx.session.synthetic({ sessionID, text: JSON.stringify(summary(cfg), null, 2) })
+        },
+      })
+      editor.add({
+        name: "node-sync",
+        description: "Pull the latest setup and memory from the hub",
+        execute: async ({ sessionID }) => {
+          await refresh(true)
+          await ctx.session.synthetic({ sessionID, text: JSON.stringify(summary(cfg), null, 2) })
+        },
+      })
+      editor.add({
+        name: "node-push",
+        description: "Push locally changed memory to the hub",
+        execute: async ({ sessionID }) => {
+          if (!current) {
+            await ctx.session.synthetic({ sessionID, text: "opencode-node: no snapshot" })
+            return
+          }
+          const result = await pushMemory(hub, cfg, current)
+          saveSnapshot(current)
+          await ctx.session.synthetic({ sessionID, text: JSON.stringify(result, null, 2) })
+        },
+      })
+    })
+
     let timer: ReturnType<typeof setInterval> | undefined
     if (cfg.memory.enabled && cfg.memory.push) {
       timer = setInterval(() => {

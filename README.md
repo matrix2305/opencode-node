@@ -2,10 +2,10 @@
 
 A node plugin for OpenCode V2: a local OpenCode server connects to a remote
 OpenCode server ("hub") and loads its agents, skills, commands, MCP servers and
-eventually memory from there.
+file-based memory from there.
 
-Status: **M2** — config, CLI, cache-first startup, full setup pull and file-based
-memory (pull, injection, tools, conflict-safe push).
+Status: **M3 / 0.1.0** — setup + memory sync, CLI, cache-first startup, TUI
+commands, conflict-safe push, tests, build and publish pipeline.
 
 ## How it works
 
@@ -32,12 +32,21 @@ the background if the cache is older than `cacheSeconds`.
 
 ## Install
 
+From npm:
+
 ```bash
-node src/cli.ts init \
+npm i -g @matrix2305/opencode-node
+oc-node init \
   --hub https://matrix2305.tailbd26da.ts.net \
-  --password-ref keychain:opencode-matrix2305 \
-  --config \
-  --restart
+  --password-ref keychain:opencode-matrix2305
+```
+
+From this repo:
+
+```bash
+npm install
+npm run build
+node dist/cli.js init --hub <url> --password-ref <ref>
 ```
 
 - `--password-ref` accepts `keychain:<service>`, `secret:<name>`, `file:<path>`,
@@ -61,8 +70,8 @@ oc-node config           # apply the config from the current snapshot
 oc-node restart          # opencode service restart
 ```
 
-`oc-node` is `src/cli.ts` (Node 23+ runs TypeScript directly). Use
-`node src/cli.ts <command>` from the repo, or install the bin after packaging.
+The published CLI is `dist/cli.js` (Node >= 22). In the repo you can also run
+`node src/cli.ts <command>` (Node 23+).
 
 ## What is synced
 
@@ -74,6 +83,16 @@ oc-node restart          # opencode service restart
 | MCP | `ctx.mcp.transform` from the hub config |
 | Config/providers | raw hub `opencode.jsonc` written locally (0600), plugin entry preserved |
 | Memory | `~/agents/<agent>/` pulled from the hub; injected into the system prompt; `memory_*` tools; conflict-safe push |
+
+## TUI
+
+Server slash commands:
+
+- `/node-status` — hub, cache age, counts, memory state.
+- `/node-sync` — force a pull.
+- `/node-push` — push memory changes.
+
+TUI part: palette/slash command **opencode-node: status** (read-only dialog).
 
 ## Memory
 
@@ -118,8 +137,13 @@ See `docs/M0-FINDINGS.md` for the spike report.
 ```bash
 npm install
 npm run typecheck
-node src/cli.ts status
+npm test
+npm run build
+node dist/cli.js status
 ```
+
+Build: tsup → `dist/index.js` (server), `dist/tui.js` (terminal),
+`dist/cli.js` (CLI). See `docs/PUBLISH.md` and `docs/COMPATIBILITY.md`.
 
 Repo layout:
 

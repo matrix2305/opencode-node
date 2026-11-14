@@ -1,20 +1,25 @@
 {
   "name": "@matrix2305/opencode-node",
-  "version": "0.0.1",
-  "description": "OpenCode node plugin: load agents, skills, commands, MCP servers and memory from a remote OpenCode hub.",
+  "version": "0.1.0",
+  "description": "OpenCode V2 node plugin: load agents, skills, commands, MCP servers and file-based memory from a remote OpenCode hub.",
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js",
+    "./tui": "./dist/tui.js",
+    "./cli": "./dist/cli.js"
   },
   "files": [
-    "src",
+    "dist",
     "docs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "oc-node": "node src/cli.ts"
+    "test": "node --test tests/*.test.ts",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "@opencode/plugin": ">=2.0 <3"
@@ -22,12 +27,29 @@
   "devDependencies": {
     "@opencode/plugin": "2.3.0",
     "@types/node": "^24.0.0",
+    "tsup": "^9.0.0",
     "typescript": "^5.9.0"
   },
   "bin": {
-    "oc-node": "./src/cli.ts"
+    "oc-node": "./dist/cli.js"
   },
   "engines": {
-    "node": ">=23"
-  }
+    "node": ">=22"
+  },
+  "main": "./dist/index.js",
+  "keywords": [
+    "opencode",
+    "plugin",
+    "memory",
+    "agents",
+    "skills",
+    "mcp",
+    "sync",
+    "hub"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matrix2305/opencode-node.git"
+  },
+  "author": "matrix2305"
 }
